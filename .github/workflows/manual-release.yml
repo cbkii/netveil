@@ -121,6 +121,12 @@ jobs:
               failed=$((failed + 1))
             fi
           done
+          for command_name in git gh jq ruby python3 unzip sha256sum; do
+            if ! command -v "$command_name" >/dev/null 2>&1; then
+              printf 'ERROR: required release command is unavailable: %s\n' "$command_name" >&2
+              failed=$((failed + 1))
+            fi
+          done
           if grep -R 'de.robv.android.xposed' -n app/src/main; then
             printf 'ERROR: legacy Xposed API reference found.\n' >&2
             failed=$((failed + 1))
@@ -158,7 +164,6 @@ jobs:
             printf 'STOP: unable to resolve versionName/versionCode from app/build.gradle.kts.\n' >&2
             exit 1
           fi
-
           if [[ ! "$source_version" =~ ^([0-9]+)\.([0-9]+)\.([0-9]+)([.-][0-9A-Za-z][0-9A-Za-z.-]*)?$ ]]; then
             printf 'STOP: source version %s is not a supported semantic version.\n' "$source_version" >&2
             exit 1
@@ -288,7 +293,6 @@ jobs:
           text = path.read_text(encoding='utf-8')
           version = os.environ['TARGET_VERSION']
           code = os.environ['TARGET_CODE']
-
           text, code_count = re.subn(
               r'(?m)^(\s*versionCode\s*=\s*)\d+(\s*)$',
               rf'\g<1>{code}\g<2>',
@@ -325,7 +329,6 @@ jobs:
             printf 'source_sha=%s\n' "$head_sha"
             printf 'resume_draft=%s\n' "$existing_draft"
           } >> "$GITHUB_OUTPUT"
-
           printf 'Release plan: %s, versionCode=%s, source=%s, resumeDraft=%s.\n' \
             "$release_tag" "$target_code" "$version_source" "$existing_draft"
 
@@ -407,7 +410,6 @@ jobs:
           set +e
           set +u
           set +o pipefail
-
           if ! gradle --no-daemon --stacktrace --warning-mode=all \
               :app:testDebugUnitTest :app:lintRelease :app:assembleRelease; then
             printf 'STOP: release tests/lint/build failed. Source metadata has not been pushed.\n' >&2
@@ -419,7 +421,6 @@ jobs:
             printf 'STOP: signed release APK was not produced at %s.\n' "$apk" >&2
             exit 1
           fi
-
           sdk_root=${ANDROID_SDK_ROOT:-${ANDROID_HOME:-}}
           apksigner="$sdk_root/build-tools/36.0.0/apksigner"
           aapt="$sdk_root/build-tools/36.0.0/aapt"
@@ -441,7 +442,6 @@ jobs:
           package_name=$(printf '%s\n' "$badging" | sed -n "s/^package: name='\([^']*\)'.*/\1/p" | head -n 1)
           version_code=$(printf '%s\n' "$badging" | sed -n "s/^package: .* versionCode='\([^']*\)'.*/\1/p" | head -n 1)
           version_name=$(printf '%s\n' "$badging" | sed -n "s/^package: .* versionName='\([^']*\)'.*/\1/p" | head -n 1)
-
           if [[ "$package_name" != 'dev.ip.netveil' ]]; then
             printf 'STOP: APK package is %s; expected dev.ip.netveil.\n' "$package_name" >&2
             exit 1
@@ -454,7 +454,6 @@ jobs:
             printf 'STOP: APK versionCode is %s; expected %s.\n' "$version_code" "$RELEASE_VERSION_CODE" >&2
             exit 1
           fi
-
           for entry in META-INF/xposed/java_init.list META-INF/xposed/module.prop; do
             if ! unzip -Z1 "$apk" | grep -Fx "$entry" >/dev/null; then
               printf 'STOP: APK is missing %s.\n' "$entry" >&2
@@ -480,10 +479,18 @@ jobs:
             printf 'STOP: local release checksum verification failed.\n' >&2
             exit 1
           fi
+          apk_sha256=$(sha256sum "$output" | awk '{print $1}')
+          sums_sha256=$(sha256sum dist/SHA256SUMS.txt | awk '{print $1}')
+          if [[ ! "$apk_sha256" =~ ^[0-9a-f]{64}$ || ! "$sums_sha256" =~ ^[0-9a-f]{64}$ ]]; then
+            printf 'STOP: failed to resolve local SHA-256 digests.\n' >&2
+            exit 1
+          fi
           {
             printf 'apk=%s\n' "$output"
             printf 'apk_name=%s\n' "$(basename "$output")"
             printf 'package_name=%s\n' "$package_name"
+            printf 'apk_sha256=%s\n' "$apk_sha256"
+            printf 'sums_sha256=%s\n' "$sums_sha256"
           } >> "$GITHUB_OUTPUT"
 
       - name: Preserve qualified release bundle
@@ -508,7 +515,6 @@ jobs:
           set +e
           set +u
           set +o pipefail
-
           release_sha=$(git rev-parse HEAD)
           rc=$?
           if ((rc != 0)); then
@@ -552,7 +558,6 @@ jobs:
           set +e
           set +u
           set +o pipefail
-
           if ! git fetch --tags origin >/dev/null 2>&1; then
             printf 'STOP: unable to refresh tags before publication.\n' >&2
             exit 1
@@ -602,65 +607,85 @@ jobs:
               printf 'STOP: failed to create draft release %s.\n' "$RELEASE_TAG" >&2
               exit 1
             fi
-            tag_sha=$(git ls-remote --refs origin "refs/tags/${RELEASE_TAG}" | awk 'NR==1 {print $1}')
-            if [[ "$tag_sha" != "$RELEASE_SHA" ]]; then
-              printf 'STOP: newly created tag %s points to %s; expected %s.\n' \
-                "$RELEASE_TAG" "${tag_sha:-missing}" "$RELEASE_SHA" >&2
-              exit 1
-            fi
           fi
 
-      - name: Upload and verify release assets
+          ready=false
+          for attempt in 1 2 3 4 5 6 7 8 9 10; do
+            draft_state=$(gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --json isDraft --jq '.isDraft' 2>/dev/null)
+            rc=$?
+            tag_sha=$(git ls-remote --refs origin "refs/tags/${RELEASE_TAG}" | awk 'NR==1 {print $1}')
+            if ((rc == 0)) && [[ "$draft_state" == 'true' && "$tag_sha" == "$RELEASE_SHA" ]]; then
+              ready=true
+              break
+            fi
+            printf 'Draft readiness check %s/10 not ready yet.\n' "$attempt"
+            sleep 2
+          done
+          if [[ "$ready" != 'true' ]]; then
+            printf 'STOP: draft release/tag did not become consistently available for %s.\n' "$RELEASE_TAG" >&2
+            exit 1
+          fi
+
+      - name: Upload and verify release asset digests
         env:
           GH_TOKEN: ${{ github.token }}
           RELEASE_TAG: ${{ steps.version.outputs.release_tag }}
           RELEASE_APK: ${{ steps.build.outputs.apk }}
           RELEASE_APK_NAME: ${{ steps.build.outputs.apk_name }}
+          EXPECTED_APK_SHA256: ${{ steps.build.outputs.apk_sha256 }}
+          EXPECTED_SUMS_SHA256: ${{ steps.build.outputs.sums_sha256 }}
         shell: bash
         run: |
           set +e
           set +u
           set +o pipefail
 
-          if ! gh release upload "$RELEASE_TAG" "$RELEASE_APK" dist/SHA256SUMS.txt \
-              --repo "$GITHUB_REPOSITORY" --clobber; then
-            printf 'STOP: release asset upload failed; the draft is retained for a safe retry.\n' >&2
+          uploaded=false
+          for attempt in 1 2 3; do
+            if gh release upload "$RELEASE_TAG" "$RELEASE_APK" dist/SHA256SUMS.txt \
+                --repo "$GITHUB_REPOSITORY" --clobber; then
+              uploaded=true
+              break
+            fi
+            printf 'Release asset upload attempt %s/3 failed; retrying bounded draft upload.\n' "$attempt" >&2
+            sleep 2
+          done
+          if [[ "$uploaded" != 'true' ]]; then
+            printf 'STOP: release asset upload failed after 3 attempts; draft retained for a safe retry.\n' >&2
             exit 1
           fi
 
-          assets=$(gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" \
-            --json assets --jq '.assets[].name')
-          rc=$?
-          if ((rc != 0)); then
-            printf 'STOP: unable to inspect uploaded release assets.\n' >&2
-            exit "$rc"
-          fi
-          if ! grep -Fx "$RELEASE_APK_NAME" <<<"$assets" >/dev/null; then
-            printf 'STOP: uploaded APK asset %s is missing from the draft release.\n' "$RELEASE_APK_NAME" >&2
+          expected_apk_digest="sha256:${EXPECTED_APK_SHA256}"
+          expected_sums_digest="sha256:${EXPECTED_SUMS_SHA256}"
+          verified=false
+          for attempt in 1 2 3 4 5 6 7 8 9 10; do
+            assets_json=$(gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --json assets 2>/dev/null)
+            rc=$?
+            if ((rc == 0)); then
+              apk_count=$(jq --arg name "$RELEASE_APK_NAME" '[.assets[] | select(.name == $name)] | length' <<< "$assets_json")
+              sums_count=$(jq '[.assets[] | select(.name == "SHA256SUMS.txt")] | length' <<< "$assets_json")
+              apk_digest=$(jq -r --arg name "$RELEASE_APK_NAME" '.assets[] | select(.name == $name) | .digest // empty' <<< "$assets_json")
+              sums_digest=$(jq -r '.assets[] | select(.name == "SHA256SUMS.txt") | .digest // empty' <<< "$assets_json")
+              unexpected=$(jq -r --arg apk "$RELEASE_APK_NAME" '.assets[].name | select(. != $apk and . != "SHA256SUMS.txt")' <<< "$assets_json")
+              if [[ "$apk_count" == '1' && "$sums_count" == '1' \
+                    && "$apk_digest" == "$expected_apk_digest" \
+                    && "$sums_digest" == "$expected_sums_digest" \
+                    && -z "$unexpected" ]]; then
+                verified=true
+                break
+              fi
+            fi
+            printf 'Remote asset digest check %s/10 not ready yet.\n' "$attempt"
+            sleep 2
+          done
+          if [[ "$verified" != 'true' ]]; then
+            printf 'STOP: remote release assets did not converge to the exact qualified digests.\n' >&2
+            printf 'STOP: expected APK=%s sums=%s\n' "$expected_apk_digest" "$expected_sums_digest" >&2
+            printf 'STOP: observed APK=%s sums=%s unexpected=%s\n' \
+              "${apk_digest:-missing}" "${sums_digest:-missing}" "${unexpected:-none}" >&2
             exit 1
           fi
-          if ! grep -Fx 'SHA256SUMS.txt' <<<"$assets" >/dev/null; then
-            printf 'STOP: uploaded SHA256SUMS.txt is missing from the draft release.\n' >&2
-            exit 1
-          fi
-          unexpected=$(printf '%s\n' "$assets" | grep -Fvx "$RELEASE_APK_NAME" | grep -Fvx 'SHA256SUMS.txt')
-          if [[ -n "$unexpected" ]]; then
-            printf 'STOP: draft release contains unexpected assets:\n%s\n' "$unexpected" >&2
-            exit 1
-          fi
-
-          rm -rf remote-check
-          mkdir -p remote-check
-          if ! gh release download "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" \
-              --pattern "$RELEASE_APK_NAME" --pattern 'SHA256SUMS.txt' \
-              --dir remote-check --clobber; then
-            printf 'STOP: unable to download draft assets for byte verification.\n' >&2
-            exit 1
-          fi
-          if ! (cd remote-check && sha256sum -c SHA256SUMS.txt); then
-            printf 'STOP: downloaded release asset checksum does not match the qualified APK.\n' >&2
-            exit 1
-          fi
+          printf 'Remote release asset SHA-256 digests verified.\n'
 
       - name: Finalise requested release state
         env:
@@ -673,7 +698,6 @@ jobs:
           set +e
           set +u
           set +o pipefail
-
           edit_args=(
             release edit "$RELEASE_TAG"
             --repo "$GITHUB_REPOSITORY"
@@ -690,7 +714,7 @@ jobs:
             edit_args+=(--draft=false)
           fi
           if ! gh "${edit_args[@]}"; then
-            printf 'STOP: failed to apply requested release state; the draft remains recoverable.\n' >&2
+            printf 'STOP: failed to apply requested release state; inspect the retained release before retrying.\n' >&2
             exit 1
           fi
 
@@ -721,30 +745,33 @@ jobs:
           RELEASE_TAG: ${{ steps.version.outputs.release_tag }}
           RELEASE_SHA: ${{ steps.source.outputs.release_sha }}
           RELEASE_APK_NAME: ${{ steps.build.outputs.apk_name }}
+          EXPECTED_APK_SHA256: ${{ steps.build.outputs.apk_sha256 }}
+          EXPECTED_SUMS_SHA256: ${{ steps.build.outputs.sums_sha256 }}
         shell: bash
         run: |
           set +e
           set +u
           set +o pipefail
-
           tag_sha=$(git ls-remote --refs origin "refs/tags/${RELEASE_TAG}" | awk 'NR==1 {print $1}')
           if [[ "$tag_sha" != "$RELEASE_SHA" ]]; then
             printf 'STOP: final tag %s points to %s; expected %s.\n' \
               "$RELEASE_TAG" "${tag_sha:-missing}" "$RELEASE_SHA" >&2
             exit 1
           fi
-          assets=$(gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets[].name')
+          assets_json=$(gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --json assets)
           rc=$?
           if ((rc != 0)); then
             printf 'STOP: unable to inspect final release assets.\n' >&2
             exit "$rc"
           fi
-          if ! grep -Fx "$RELEASE_APK_NAME" <<<"$assets" >/dev/null \
-              || ! grep -Fx 'SHA256SUMS.txt' <<<"$assets" >/dev/null; then
-            printf 'STOP: final release is missing one or more required assets.\n' >&2
+          apk_digest=$(jq -r --arg name "$RELEASE_APK_NAME" '.assets[] | select(.name == $name) | .digest // empty' <<< "$assets_json")
+          sums_digest=$(jq -r '.assets[] | select(.name == "SHA256SUMS.txt") | .digest // empty' <<< "$assets_json")
+          if [[ "$apk_digest" != "sha256:${EXPECTED_APK_SHA256}" \
+                || "$sums_digest" != "sha256:${EXPECTED_SUMS_SHA256}" ]]; then
+            printf 'STOP: final release asset digests changed after qualification.\n' >&2
             exit 1
           fi
-          printf 'Release %s verified at %s.\n' "$RELEASE_TAG" "$RELEASE_SHA"
+          printf 'Release %s verified at %s with exact asset digests.\n' "$RELEASE_TAG" "$RELEASE_SHA"
 
       - name: Release summary
         if: always()
@@ -777,4 +804,3 @@ jobs:
         shell: bash
         run: |
           rm -f ReleaseKey.jks keystore.properties
-          rm -rf remote-check
