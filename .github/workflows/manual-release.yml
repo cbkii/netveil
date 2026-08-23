@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
     inputs:
       version_tag:
-        description: 'Release version/tag. Blank auto-increments patch; explicit X.Y.Z or vX.Y.Z is authoritative.'
+        description: 'Release version/tag. Blank auto-increments patch, or resumes an interrupted prepared release.'
         required: false
         type: string
       draft:
@@ -64,8 +64,18 @@ jobs:
             printf 'STOP: failed to refresh default branch and tags before release.\n' >&2
             exit 1
           fi
-          local_head=$(git rev-parse HEAD) || exit 1
-          remote_head=$(git rev-parse "origin/${GITHUB_REF_NAME}") || exit 1
+          local_head=$(git rev-parse HEAD)
+          rc=$?
+          if ((rc != 0)); then
+            printf 'STOP: unable to resolve checked-out HEAD.\n' >&2
+            exit "$rc"
+          fi
+          remote_head=$(git rev-parse "origin/${GITHUB_REF_NAME}")
+          rc=$?
+          if ((rc != 0)); then
+            printf 'STOP: unable to resolve remote default-branch HEAD.\n' >&2
+            exit "$rc"
+          fi
           if [[ "$local_head" != "$remote_head" ]]; then
             printf 'STOP: release checkout is stale. Local=%s Remote=%s\n' "$local_head" "$remote_head" >&2
             exit 1
@@ -123,6 +133,10 @@ jobs:
             printf 'ERROR: applicationId is not dev.ip.netveil.\n' >&2
             failed=$((failed + 1))
           fi
+          if ! ruby -e 'require "yaml"; ARGV.each { |f| Psych.safe_load(File.read(f), permitted_classes: [], permitted_symbols: [], aliases: false); puts "OK #{f}" }' .github/workflows/*.yml; then
+            printf 'ERROR: one or more GitHub workflow YAML files are invalid.\n' >&2
+            failed=$((failed + 1))
+          fi
           if ((failed > 0)); then
             exit 1
           fi
@@ -145,22 +159,78 @@ jobs:
             exit 1
           fi
 
+          if [[ ! "$source_version" =~ ^([0-9]+)\.([0-9]+)\.([0-9]+)([.-][0-9A-Za-z][0-9A-Za-z.-]*)?$ ]]; then
+            printf 'STOP: source version %s is not a supported semantic version.\n' "$source_version" >&2
+            exit 1
+          fi
+
+          head_sha=$(git rev-parse HEAD)
+          rc=$?
+          if ((rc != 0)); then
+            printf 'STOP: unable to resolve source HEAD.\n' >&2
+            exit "$rc"
+          fi
+          head_subject=$(git log -1 --format=%s)
+          rc=$?
+          if ((rc != 0)); then
+            printf 'STOP: unable to inspect source HEAD commit message.\n' >&2
+            exit "$rc"
+          fi
+
+          source_tag="v${source_version}"
+          source_tag_sha=$(git ls-remote --refs origin "refs/tags/${source_tag}" | awk 'NR==1 {print $1}')
+          source_release_exists=false
+          source_release_draft=false
+          if gh release view "$source_tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            source_release_exists=true
+            source_release_draft=$(gh release view "$source_tag" --repo "$GITHUB_REPOSITORY" --json isDraft --jq '.isDraft')
+            rc=$?
+            if ((rc != 0)); then
+              printf 'STOP: unable to inspect existing release %s.\n' "$source_tag" >&2
+              exit "$rc"
+            fi
+          fi
+
           requested=$(printf '%s' "${INPUT_VERSION_TAG:-}" | xargs)
           requested=${requested#v}
-          if [[ -z "$requested" ]]; then
-            if [[ ! "$source_version" =~ ^([0-9]+)\.([0-9]+)\.([0-9]+)$ ]]; then
-              printf 'STOP: automatic patch increment requires numeric X.Y.Z source version; found %s.\n' "$source_version" >&2
-              exit 1
-            fi
-            target_version="${BASH_REMATCH[1]}.${BASH_REMATCH[2]}.$((BASH_REMATCH[3] + 1))"
-            version_source='auto-patch'
-          else
+          if [[ -n "$requested" ]]; then
             target_version=$requested
             if [[ ! "$target_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z][0-9A-Za-z.-]*)?$ ]]; then
               printf 'STOP: requested version %s is not a supported semantic version.\n' "$target_version" >&2
               exit 1
             fi
             version_source='workflow-dispatch'
+          else
+            prepared_subject="chore(release): prepare ${source_tag}"
+            if [[ "$source_release_exists" == 'true' && "$source_release_draft" == 'true' ]]; then
+              if [[ "$head_subject" != "$prepared_subject" || "$source_tag_sha" != "$head_sha" ]]; then
+                printf 'STOP: draft %s exists, but current HEAD is not the matching prepared release source.\n' \
+                  "$source_tag" >&2
+                printf 'STOP: HEAD=%s tag=%s subject=%s\n' \
+                  "$head_sha" "${source_tag_sha:-missing}" "$head_subject" >&2
+                exit 1
+              fi
+              target_version=$source_version
+              version_source='resume-draft'
+            elif [[ "$source_release_exists" == 'true' ]]; then
+              core=${source_version%%-*}
+              core=${core%%+*}
+              IFS='.' read -r major minor patch <<< "$core"
+              target_version="${major}.${minor}.$((patch + 1))"
+              version_source='auto-patch'
+            elif [[ -n "$source_tag_sha" ]]; then
+              printf 'STOP: tag %s exists without a GitHub Release; refusing ambiguous recovery.\n' "$source_tag" >&2
+              exit 1
+            elif [[ "$head_subject" == "$prepared_subject" ]]; then
+              target_version=$source_version
+              version_source='resume-prepared-source'
+            else
+              core=${source_version%%-*}
+              core=${core%%+*}
+              IFS='.' read -r major minor patch <<< "$core"
+              target_version="${major}.${minor}.$((patch + 1))"
+              version_source='auto-patch'
+            fi
           fi
 
           release_tag="v${target_version}"
@@ -176,6 +246,11 @@ jobs:
           if gh release view "$release_tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
             existing_release=true
             existing_draft=$(gh release view "$release_tag" --repo "$GITHUB_REPOSITORY" --json isDraft --jq '.isDraft')
+            rc=$?
+            if ((rc != 0)); then
+              printf 'STOP: unable to inspect target release %s.\n' "$release_tag" >&2
+              exit "$rc"
+            fi
             if [[ "$existing_draft" != 'true' ]]; then
               printf 'STOP: published GitHub Release %s already exists; published releases are immutable.\n' "$release_tag" >&2
               exit 1
@@ -192,16 +267,13 @@ jobs:
             printf 'STOP: tag %s already exists before the required metadata commit.\n' "$release_tag" >&2
             exit 1
           fi
-          if [[ -n "$remote_tag_sha" && "$metadata_changed" == 'false' ]]; then
-            current_sha=$(git rev-parse HEAD) || exit 1
-            if [[ "$remote_tag_sha" != "$current_sha" ]]; then
-              printf 'STOP: existing tag %s points to %s, expected current source %s.\n' \
-                "$release_tag" "$remote_tag_sha" "$current_sha" >&2
-              exit 1
-            fi
+          if [[ -n "$remote_tag_sha" && "$metadata_changed" == 'false' && "$remote_tag_sha" != "$head_sha" ]]; then
+            printf 'STOP: existing tag %s points to %s; expected current source %s.\n' \
+              "$release_tag" "$remote_tag_sha" "$head_sha" >&2
+            exit 1
           fi
           if [[ -n "$remote_tag_sha" && "$existing_release" != 'true' ]]; then
-            printf 'STOP: tag %s exists without a GitHub Release; refusing to guess recovery intent.\n' "$release_tag" >&2
+            printf 'STOP: tag %s exists without a GitHub Release; refusing ambiguous recovery.\n' "$release_tag" >&2
             exit 1
           fi
 
@@ -216,6 +288,7 @@ jobs:
           text = path.read_text(encoding='utf-8')
           version = os.environ['TARGET_VERSION']
           code = os.environ['TARGET_CODE']
+
           text, code_count = re.subn(
               r'(?m)^(\s*versionCode\s*=\s*)\d+(\s*)$',
               rf'\g<1>{code}\g<2>',
@@ -249,7 +322,7 @@ jobs:
             printf 'version_code=%s\n' "$target_code"
             printf 'version_source=%s\n' "$version_source"
             printf 'metadata_changed=%s\n' "$metadata_changed"
-            printf 'source_sha=%s\n' "$(git rev-parse HEAD)"
+            printf 'source_sha=%s\n' "$head_sha"
             printf 'resume_draft=%s\n' "$existing_draft"
           } >> "$GITHUB_OUTPUT"
 
@@ -414,7 +487,7 @@ jobs:
           } >> "$GITHUB_OUTPUT"
 
       - name: Preserve qualified release bundle
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: qualified-release-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
@@ -436,7 +509,12 @@ jobs:
           set +u
           set +o pipefail
 
-          release_sha=$(git rev-parse HEAD) || exit 1
+          release_sha=$(git rev-parse HEAD)
+          rc=$?
+          if ((rc != 0)); then
+            printf 'STOP: unable to resolve release source before metadata commit.\n' >&2
+            exit "$rc"
+          fi
           if [[ "$METADATA_CHANGED" == 'true' ]]; then
             if git diff --quiet -- app/build.gradle.kts; then
               printf 'STOP: release metadata was expected to change but app/build.gradle.kts is unchanged.\n' >&2
@@ -449,7 +527,12 @@ jobs:
               printf 'STOP: failed to commit release metadata.\n' >&2
               exit 1
             fi
-            release_sha=$(git rev-parse HEAD) || exit 1
+            release_sha=$(git rev-parse HEAD)
+            rc=$?
+            if ((rc != 0)); then
+              printf 'STOP: unable to resolve release metadata commit.\n' >&2
+              exit "$rc"
+            fi
             if ! git push --force-with-lease="refs/heads/${GITHUB_REF_NAME}:${SOURCE_SHA}" \
                 origin "HEAD:${GITHUB_REF_NAME}"; then
               printf 'STOP: default branch changed or release metadata push failed; release not published.\n' >&2
@@ -459,7 +542,6 @@ jobs:
           printf 'release_sha=%s\n' "$release_sha" >> "$GITHUB_OUTPUT"
 
       - name: Create or resume draft release
-        id: draft_release
         env:
           GH_TOKEN: ${{ github.token }}
           RELEASE_TAG: ${{ steps.version.outputs.release_tag }}
@@ -481,6 +563,11 @@ jobs:
           if gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
             existing_release=true
             existing_draft=$(gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --json isDraft --jq '.isDraft')
+            rc=$?
+            if ((rc != 0)); then
+              printf 'STOP: unable to inspect release %s before publication.\n' "$RELEASE_TAG" >&2
+              exit "$rc"
+            fi
             if [[ "$existing_draft" != 'true' ]]; then
               printf 'STOP: published release %s appeared while building.\n' "$RELEASE_TAG" >&2
               exit 1
@@ -522,7 +609,6 @@ jobs:
               exit 1
             fi
           fi
-          printf 'tag_sha=%s\n' "$tag_sha" >> "$GITHUB_OUTPUT"
 
       - name: Upload and verify release assets
         env:
@@ -555,6 +641,11 @@ jobs:
           fi
           if ! grep -Fx 'SHA256SUMS.txt' <<<"$assets" >/dev/null; then
             printf 'STOP: uploaded SHA256SUMS.txt is missing from the draft release.\n' >&2
+            exit 1
+          fi
+          unexpected=$(printf '%s\n' "$assets" | grep -Fvx "$RELEASE_APK_NAME" | grep -Fvx 'SHA256SUMS.txt')
+          if [[ -n "$unexpected" ]]; then
+            printf 'STOP: draft release contains unexpected assets:\n%s\n' "$unexpected" >&2
             exit 1
           fi
 
@@ -604,7 +695,17 @@ jobs:
           fi
 
           actual_draft=$(gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --json isDraft --jq '.isDraft')
+          rc=$?
+          if ((rc != 0)); then
+            printf 'STOP: unable to verify final draft state.\n' >&2
+            exit "$rc"
+          fi
           actual_prerelease=$(gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --json isPrerelease --jq '.isPrerelease')
+          rc=$?
+          if ((rc != 0)); then
+            printf 'STOP: unable to verify final prerelease state.\n' >&2
+            exit "$rc"
+          fi
           if [[ "$actual_draft" != "$DRAFT" ]]; then
             printf 'STOP: release draft state is %s; expected %s.\n' "$actual_draft" "$DRAFT" >&2
             exit 1
@@ -633,6 +734,11 @@ jobs:
             exit 1
           fi
           assets=$(gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets[].name')
+          rc=$?
+          if ((rc != 0)); then
+            printf 'STOP: unable to inspect final release assets.\n' >&2
+            exit "$rc"
+          fi
           if ! grep -Fx "$RELEASE_APK_NAME" <<<"$assets" >/dev/null \
               || ! grep -Fx 'SHA256SUMS.txt' <<<"$assets" >/dev/null; then
             printf 'STOP: final release is missing one or more required assets.\n' >&2
