@@ -1,0 +1,112 @@
+name: Temporary network introspection repair
+
+on:
+  push:
+    branches: [ fix/release-workflow ]
+    paths:
+      - .github/workflows/repair-network-introspection.yml
+
+permissions:
+  contents: write
+
+jobs:
+  repair:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: fix/release-workflow
+          fetch-depth: 0
+
+      - name: Replace private-field reflection with libxposed origin invokers
+        shell: bash
+        run: |
+          set +e
+          set +u
+          set +o pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          import sys
+
+          path = Path('app/src/main/java/io/github/cbkii/netveil/xposed/NetworkHooks.java')
+          text = path.read_text(encoding='utf-8')
+
+          replacements = []
+          replacements.append((
+              'import java.lang.reflect.Field;\nimport java.lang.reflect.Method;',
+              'import java.lang.reflect.Method;'
+          ))
+          replacements.append((
+              '''    private final List<InetAddress> dns;\n\n    private final Map<RouteInfo, RouteMask> routeMasks =''',
+              '''    private final List<InetAddress> dns;\n    private final XposedInterface.Invoker<?, Method> networkInfoGetTypeOrigin;\n    private final XposedInterface.Invoker<?, Method> networkCapabilitiesHasTransportOrigin;\n\n    private final Map<RouteInfo, RouteMask> routeMasks ='''
+          ))
+          replacements.append((
+              '''        this.dns = Collections.unmodifiableList(values);\n        this.presentationInterface = selectPresentationInterface();''',
+              '''        this.dns = Collections.unmodifiableList(values);\n        this.networkInfoGetTypeOrigin = originalInvoker(NetworkInfo.class, "getType");\n        this.networkCapabilitiesHasTransportOrigin =\n                originalInvoker(NetworkCapabilities.class, "hasTransport", int.class);\n        this.presentationInterface = selectPresentationInterface();'''
+          ))
+          replacements.append((
+              '''    private int rawLegacyNetworkType(NetworkInfo info) {\n        try {\n            Field field = NetworkInfo.class.getDeclaredField("mNetworkType");\n            field.setAccessible(true);\n            return field.getInt(info);\n        } catch (Throwable ignored) {\n            return Integer.MIN_VALUE;\n        }\n    }''',
+              '''    private int rawLegacyNetworkType(NetworkInfo info) {\n        if (networkInfoGetTypeOrigin == null) return Integer.MIN_VALUE;\n        try {\n            Object value = networkInfoGetTypeOrigin.invoke(info);\n            return value instanceof Integer ? (Integer) value : Integer.MIN_VALUE;\n        } catch (Throwable ignored) {\n            return Integer.MIN_VALUE;\n        }\n    }'''
+          ))
+          replacements.append((
+              '''    private boolean rawHasTransport(NetworkCapabilities capabilities, int transport) {\n        try {\n            Field field = NetworkCapabilities.class.getDeclaredField("mTransportTypes");\n            field.setAccessible(true);\n            long mask = field.getLong(capabilities);\n            return (mask & (1L << transport)) != 0;\n        } catch (Throwable ignored) {\n            return false;\n        }\n    }''',
+              '''    private boolean rawHasTransport(NetworkCapabilities capabilities, int transport) {\n        if (networkCapabilitiesHasTransportOrigin == null) return false;\n        try {\n            Object value = networkCapabilitiesHasTransportOrigin.invoke(capabilities, transport);\n            return value instanceof Boolean && (Boolean) value;\n        } catch (Throwable ignored) {\n            return false;\n        }\n    }'''
+          ))
+          replacements.append((
+              '''    private interface Transformer {\n        Object apply(XposedInterface.Chain chain, Object original) throws Throwable;\n    }''',
+              '''    private XposedInterface.Invoker<?, Method> originalInvoker(\n            Class<?> owner, String name, Class<?>... params) {\n        try {\n            Method method = owner.getDeclaredMethod(name, params);\n            XposedInterface.Invoker<?, Method> invoker = module.getInvoker(method);\n            invoker.setType(XposedInterface.Invoker.Type.ORIGIN);\n            return invoker;\n        } catch (Throwable t) {\n            module.log(Log.WARN, TAG, "original invoker unavailable: " + owner.getName() + "." + name, t);\n            return null;\n        }\n    }\n\n    private interface Transformer {\n        Object apply(XposedInterface.Chain chain, Object original) throws Throwable;\n    }'''
+          ))
+
+          for old, new in replacements:
+              count = text.count(old)
+              if count != 1:
+                  print(f'STOP: expected exactly one source match, found {count}: {old[:80]!r}', file=sys.stderr)
+                  sys.exit(1)
+              text = text.replace(old, new, 1)
+
+          forbidden = ('getDeclaredField("mNetworkType")', 'getDeclaredField("mTransportTypes")', 'java.lang.reflect.Field')
+          for token in forbidden:
+              if token in text:
+                  print(f'STOP: forbidden private-field reflection remains: {token}', file=sys.stderr)
+                  sys.exit(1)
+
+          required = (
+              'networkInfoGetTypeOrigin.invoke(info)',
+              'networkCapabilitiesHasTransportOrigin.invoke(capabilities, transport)',
+              'invoker.setType(XposedInterface.Invoker.Type.ORIGIN)',
+          )
+          for token in required:
+              if token not in text:
+                  print(f'STOP: expected origin-invoker code is missing: {token}', file=sys.stderr)
+                  sys.exit(1)
+
+          path.write_text(text, encoding='utf-8', newline='\n')
+          PY
+          rc=$?
+          if ((rc != 0)); then
+            exit "$rc"
+          fi
+
+      - name: Commit repaired source
+        shell: bash
+        run: |
+          set +e
+          set +u
+          set +o pipefail
+          path='app/src/main/java/io/github/cbkii/netveil/xposed/NetworkHooks.java'
+          if git diff --quiet -- "$path"; then
+            printf 'STOP: source repair produced no diff.\n' >&2
+            exit 1
+          fi
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -- "$path"
+          if ! git commit -m 'fix: use libxposed origin invokers for raw network state'; then
+            printf 'STOP: failed to commit network introspection repair.\n' >&2
+            exit 1
+          fi
+          if ! git push origin HEAD:fix/release-workflow; then
+            printf 'STOP: failed to push network introspection repair.\n' >&2
+            exit 1
+          fi
