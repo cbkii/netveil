@@ -1,12 +1,4 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <lint>
-    <!--
-      NetworkHooks runs inside an Xposed/libxposed-injected process and intentionally
-      reflects selected Android framework internals as hook implementation details.
-      Keep this suppression file-local so SoonBlockedPrivateApi remains an error
-      everywhere else in the application.
-    -->
-    <issue id="SoonBlockedPrivateApi">
-        <ignore path="src/main/java/io/github/cbkii/netveil/xposed/NetworkHooks.java" />
-    </issue>
+    <!-- Intentionally empty: release lint has no NetVeil-specific issue suppressions. -->
 </lint>
