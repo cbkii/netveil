@@ -272,7 +272,7 @@ final class NetworkHooks {
 
     private Object spoofLinkAddresses(Object original) {
         List<LinkAddress> out = new ArrayList<>();
-        out.add(new LinkAddress(ip, p.prefixLength));
+        out.add(LinkAddressCompat.create(ip, p.prefixLength));
         if (!p.hideIpv6 && original instanceof List<?>) {
             for (Object value : (List<?>) original) {
                 if (value instanceof LinkAddress
