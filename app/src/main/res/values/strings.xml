@@ -1,0 +1,4 @@
+<resources>
+    <string name="app_name">NetVeil</string>
+    <string name="app_description">Per-app IP, gateway, DNS, VPN and proxy visibility masking for LSPosed/Vector.</string>
+</resources>

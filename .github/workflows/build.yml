@@ -1,0 +1,59 @@
+name: Build
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: build-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  android:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '9.5.0'
+
+      - name: Repository sanity
+        shell: bash
+        run: |
+          test -f app/src/main/resources/META-INF/xposed/java_init.list
+          test -f app/src/main/resources/META-INF/xposed/module.prop
+          if grep -R "de.robv.android.xposed" -n app/src/main; then
+            echo "Legacy Xposed API reference found" >&2
+            exit 1
+          fi
+          if grep -R "android.permission.INTERNET" -n app/src/main; then
+            echo "Unexpected INTERNET permission found" >&2
+            exit 1
+          fi
+
+      - name: Unit tests and debug APK
+        run: gradle --no-daemon --stacktrace :app:testDebugUnitTest :app:assembleDebug
+
+      - name: Verify APK exists
+        run: test -s app/build/outputs/apk/debug/app-debug.apk
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: netveil-v0.2.1-debug-${{ github.sha }}
+          path: app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
+          retention-days: 14
