@@ -1,0 +1,74 @@
+name: Temporary source repair
+
+on:
+  push:
+    branches:
+      - feat/manual-release
+    paths:
+      - .github/workflows/repair-linkaddress.yml
+
+permissions:
+  contents: write
+
+jobs:
+  repair:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: feat/manual-release
+          fetch-depth: 0
+      - name: Apply exact compile repair
+        shell: bash
+        run: |
+          set +e
+          set +u
+          set +o pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          import sys
+
+          path = Path('app/src/main/java/io/github/cbkii/netveil/xposed/NetworkHooks.java')
+          text = path.read_text(encoding='utf-8')
+          old = 'out.add(new LinkAddress(ip, p.prefixLength));'
+          new = 'out.add(LinkAddressCompat.create(ip, p.prefixLength));'
+          count = text.count(old)
+          if count != 1:
+              print(f'STOP: expected one LinkAddress constructor call, found {count}.', file=sys.stderr)
+              sys.exit(1)
+          path.write_text(text.replace(old, new), encoding='utf-8', newline='\n')
+          PY
+          rc=$?
+          if ((rc != 0)); then
+            exit "$rc"
+          fi
+          if grep -F 'new LinkAddress(ip, p.prefixLength)' app/src/main/java/io/github/cbkii/netveil/xposed/NetworkHooks.java; then
+            printf 'STOP: direct hidden LinkAddress constructor reference remains.\n' >&2
+            exit 1
+          fi
+          if ! grep -F 'LinkAddressCompat.create(ip, p.prefixLength)' app/src/main/java/io/github/cbkii/netveil/xposed/NetworkHooks.java >/dev/null; then
+            printf 'STOP: compatibility bridge call was not written.\n' >&2
+            exit 1
+          fi
+      - name: Commit repaired source
+        shell: bash
+        run: |
+          set +e
+          set +u
+          set +o pipefail
+          if git diff --quiet -- app/src/main/java/io/github/cbkii/netveil/xposed/NetworkHooks.java; then
+            printf 'STOP: source repair produced no diff.\n' >&2
+            exit 1
+          fi
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -- app/src/main/java/io/github/cbkii/netveil/xposed/NetworkHooks.java
+          if ! git commit -m 'fix: avoid compile-time hidden LinkAddress API'; then
+            printf 'STOP: failed to commit source repair.\n' >&2
+            exit 1
+          fi
+          if ! git push origin HEAD:feat/manual-release; then
+            printf 'STOP: failed to push source repair.\n' >&2
+            exit 1
+          fi
