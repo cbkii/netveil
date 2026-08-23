@@ -53,6 +53,12 @@ android {
         }
     }
 
+    lint {
+        // Keep release lint policy explicit and version-controlled. app/lint.xml intentionally
+        // contains no issue suppressions, so lintRelease remains an authoritative release gate.
+        lintConfig = file("lint.xml")
+    }
+
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17

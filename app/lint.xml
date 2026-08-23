@@ -1,0 +1,4 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<lint>
+    <!-- Intentionally empty: release lint has no NetVeil-specific issue suppressions. -->
+</lint>

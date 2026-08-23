@@ -6,11 +6,11 @@ on:
   workflow_dispatch:
     inputs:
       version_tag:
-        description: 'Release version/tag. Blank auto-increments patch; an explicit X.Y.Z or vX.Y.Z is authoritative.'
+        description: 'Release version/tag. Blank auto-increments patch, or resumes an interrupted prepared release.'
         required: false
         type: string
       draft:
-        description: 'Create the GitHub Release as a draft'
+        description: 'Leave the GitHub Release as a draft'
         required: true
         default: false
         type: boolean
@@ -24,14 +24,14 @@ permissions:
   contents: write
 
 concurrency:
-  group: manual-release-${{ github.repository }}
+  group: netveil-manual-release
   cancel-in-progress: false
 
 jobs:
   release:
     name: Build, verify and publish signed APK
     runs-on: ubuntu-24.04
-    timeout-minutes: 30
+    timeout-minutes: 35
 
     steps:
       - name: Require default branch
@@ -60,12 +60,22 @@ jobs:
           set +e
           set +u
           set +o pipefail
-          if ! git fetch --no-tags origin "$GITHUB_REF_NAME"; then
-            printf 'STOP: failed to refresh default branch before release.\n' >&2
+          if ! git fetch --tags origin "+refs/heads/${GITHUB_REF_NAME}:refs/remotes/origin/${GITHUB_REF_NAME}"; then
+            printf 'STOP: failed to refresh default branch and tags before release.\n' >&2
             exit 1
           fi
-          local_head=$(git rev-parse HEAD) || exit 1
-          remote_head=$(git rev-parse "origin/$GITHUB_REF_NAME") || exit 1
+          local_head=$(git rev-parse HEAD)
+          rc=$?
+          if ((rc != 0)); then
+            printf 'STOP: unable to resolve checked-out HEAD.\n' >&2
+            exit "$rc"
+          fi
+          remote_head=$(git rev-parse "origin/${GITHUB_REF_NAME}")
+          rc=$?
+          if ((rc != 0)); then
+            printf 'STOP: unable to resolve remote default-branch HEAD.\n' >&2
+            exit "$rc"
+          fi
           if [[ "$local_head" != "$remote_head" ]]; then
             printf 'STOP: release checkout is stale. Local=%s Remote=%s\n' "$local_head" "$remote_head" >&2
             exit 1
@@ -104,9 +114,16 @@ jobs:
           for path in \
             app/src/main/resources/META-INF/xposed/java_init.list \
             app/src/main/resources/META-INF/xposed/module.prop \
-            app/build.gradle.kts; do
+            app/build.gradle.kts \
+            app/lint.xml; do
             if [[ ! -f "$path" ]]; then
               printf 'ERROR: required release input is missing: %s\n' "$path" >&2
+              failed=$((failed + 1))
+            fi
+          done
+          for command_name in git gh jq ruby python3 unzip sha256sum; do
+            if ! command -v "$command_name" >/dev/null 2>&1; then
+              printf 'ERROR: required release command is unavailable: %s\n' "$command_name" >&2
               failed=$((failed + 1))
             fi
           done
@@ -120,6 +137,10 @@ jobs:
           fi
           if ! grep -F 'applicationId = "dev.ip.netveil"' app/build.gradle.kts >/dev/null; then
             printf 'ERROR: applicationId is not dev.ip.netveil.\n' >&2
+            failed=$((failed + 1))
+          fi
+          if ! ruby -e 'require "yaml"; ARGV.each { |f| Psych.safe_load(File.read(f), permitted_classes: [], permitted_symbols: [], aliases: false); puts "OK #{f}" }' .github/workflows/*.yml; then
+            printf 'ERROR: one or more GitHub workflow YAML files are invalid.\n' >&2
             failed=$((failed + 1))
           fi
           if ((failed > 0)); then
@@ -143,44 +164,125 @@ jobs:
             printf 'STOP: unable to resolve versionName/versionCode from app/build.gradle.kts.\n' >&2
             exit 1
           fi
+          if [[ ! "$source_version" =~ ^([0-9]+)\.([0-9]+)\.([0-9]+)([.-][0-9A-Za-z][0-9A-Za-z.-]*)?$ ]]; then
+            printf 'STOP: source version %s is not a supported semantic version.\n' "$source_version" >&2
+            exit 1
+          fi
+
+          head_sha=$(git rev-parse HEAD)
+          rc=$?
+          if ((rc != 0)); then
+            printf 'STOP: unable to resolve source HEAD.\n' >&2
+            exit "$rc"
+          fi
+          head_subject=$(git log -1 --format=%s)
+          rc=$?
+          if ((rc != 0)); then
+            printf 'STOP: unable to inspect source HEAD commit message.\n' >&2
+            exit "$rc"
+          fi
+
+          source_tag="v${source_version}"
+          source_tag_sha=$(git ls-remote --refs origin "refs/tags/${source_tag}" | awk 'NR==1 {print $1}')
+          source_release_exists=false
+          source_release_draft=false
+          if gh release view "$source_tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            source_release_exists=true
+            source_release_draft=$(gh release view "$source_tag" --repo "$GITHUB_REPOSITORY" --json isDraft --jq '.isDraft')
+            rc=$?
+            if ((rc != 0)); then
+              printf 'STOP: unable to inspect existing release %s.\n' "$source_tag" >&2
+              exit "$rc"
+            fi
+          fi
 
           requested=$(printf '%s' "${INPUT_VERSION_TAG:-}" | xargs)
           requested=${requested#v}
-          if [[ -z "$requested" ]]; then
-            if [[ ! "$source_version" =~ ^([0-9]+)\.([0-9]+)\.([0-9]+)$ ]]; then
-              printf 'STOP: automatic patch increment requires numeric X.Y.Z source version; found %s.\n' "$source_version" >&2
-              exit 1
-            fi
-            target_version="${BASH_REMATCH[1]}.${BASH_REMATCH[2]}.$((BASH_REMATCH[3] + 1))"
-            version_source='auto-patch'
-          else
+          if [[ -n "$requested" ]]; then
             target_version=$requested
             if [[ ! "$target_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z][0-9A-Za-z.-]*)?$ ]]; then
               printf 'STOP: requested version %s is not a supported semantic version.\n' "$target_version" >&2
               exit 1
             fi
             version_source='workflow-dispatch'
+          else
+            prepared_subject="chore(release): prepare ${source_tag}"
+            if [[ "$source_release_exists" == 'true' && "$source_release_draft" == 'true' ]]; then
+              if [[ "$head_subject" != "$prepared_subject" || "$source_tag_sha" != "$head_sha" ]]; then
+                printf 'STOP: draft %s exists, but current HEAD is not the matching prepared release source.\n' \
+                  "$source_tag" >&2
+                printf 'STOP: HEAD=%s tag=%s subject=%s\n' \
+                  "$head_sha" "${source_tag_sha:-missing}" "$head_subject" >&2
+                exit 1
+              fi
+              target_version=$source_version
+              version_source='resume-draft'
+            elif [[ "$source_release_exists" == 'true' ]]; then
+              core=${source_version%%-*}
+              core=${core%%+*}
+              IFS='.' read -r major minor patch <<< "$core"
+              target_version="${major}.${minor}.$((patch + 1))"
+              version_source='auto-patch'
+            elif [[ -n "$source_tag_sha" ]]; then
+              printf 'STOP: tag %s exists without a GitHub Release; refusing ambiguous recovery.\n' "$source_tag" >&2
+              exit 1
+            elif [[ "$head_subject" == "$prepared_subject" ]]; then
+              target_version=$source_version
+              version_source='resume-prepared-source'
+            else
+              core=${source_version%%-*}
+              core=${core%%+*}
+              IFS='.' read -r major minor patch <<< "$core"
+              target_version="${major}.${minor}.$((patch + 1))"
+              version_source='auto-patch'
+            fi
           fi
 
           release_tag="v${target_version}"
-          if git show-ref --tags --verify --quiet "refs/tags/${release_tag}"; then
-            printf 'STOP: git tag %s already exists; releases are immutable.\n' "$release_tag" >&2
-            exit 1
-          fi
-          if git ls-remote --exit-code --tags origin "refs/tags/${release_tag}" >/dev/null 2>&1; then
-            printf 'STOP: remote git tag %s already exists; releases are immutable.\n' "$release_tag" >&2
-            exit 1
-          fi
-          if gh release view "$release_tag" >/dev/null 2>&1; then
-            printf 'STOP: GitHub Release %s already exists; releases are immutable.\n' "$release_tag" >&2
-            exit 1
-          fi
-
           target_code=$source_code
           metadata_changed=false
           if [[ "$target_version" != "$source_version" ]]; then
             target_code=$((source_code + 1))
             metadata_changed=true
+          fi
+
+          existing_release=false
+          existing_draft=false
+          if gh release view "$release_tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            existing_release=true
+            existing_draft=$(gh release view "$release_tag" --repo "$GITHUB_REPOSITORY" --json isDraft --jq '.isDraft')
+            rc=$?
+            if ((rc != 0)); then
+              printf 'STOP: unable to inspect target release %s.\n' "$release_tag" >&2
+              exit "$rc"
+            fi
+            if [[ "$existing_draft" != 'true' ]]; then
+              printf 'STOP: published GitHub Release %s already exists; published releases are immutable.\n' "$release_tag" >&2
+              exit 1
+            fi
+            if [[ "$metadata_changed" == 'true' ]]; then
+              printf 'STOP: draft release %s exists but source metadata is still %s; refusing an ambiguous resume.\n' \
+                "$release_tag" "$source_version" >&2
+              exit 1
+            fi
+          fi
+
+          remote_tag_sha=$(git ls-remote --refs origin "refs/tags/${release_tag}" | awk 'NR==1 {print $1}')
+          if [[ -n "$remote_tag_sha" && "$metadata_changed" == 'true' ]]; then
+            printf 'STOP: tag %s already exists before the required metadata commit.\n' "$release_tag" >&2
+            exit 1
+          fi
+          if [[ -n "$remote_tag_sha" && "$metadata_changed" == 'false' && "$remote_tag_sha" != "$head_sha" ]]; then
+            printf 'STOP: existing tag %s points to %s; expected current source %s.\n' \
+              "$release_tag" "$remote_tag_sha" "$head_sha" >&2
+            exit 1
+          fi
+          if [[ -n "$remote_tag_sha" && "$existing_release" != 'true' ]]; then
+            printf 'STOP: tag %s exists without a GitHub Release; refusing ambiguous recovery.\n' "$release_tag" >&2
+            exit 1
+          fi
+
+          if [[ "$metadata_changed" == 'true' ]]; then
             if ! TARGET_VERSION="$target_version" TARGET_CODE="$target_code" python3 - <<'PY'
           import os
           import pathlib
@@ -224,11 +326,11 @@ jobs:
             printf 'version_code=%s\n' "$target_code"
             printf 'version_source=%s\n' "$version_source"
             printf 'metadata_changed=%s\n' "$metadata_changed"
-            printf 'source_sha=%s\n' "$(git rev-parse HEAD)"
+            printf 'source_sha=%s\n' "$head_sha"
+            printf 'resume_draft=%s\n' "$existing_draft"
           } >> "$GITHUB_OUTPUT"
-
-          printf 'Release plan: %s, versionCode=%s, source=%s.\n' \
-            "$release_tag" "$target_code" "$version_source"
+          printf 'Release plan: %s, versionCode=%s, source=%s, resumeDraft=%s.\n' \
+            "$release_tag" "$target_code" "$version_source" "$existing_draft"
 
       - name: Set up JDK 17
         uses: actions/setup-java@v5
@@ -247,7 +349,8 @@ jobs:
           set +e
           set +u
           set +o pipefail
-          sdkmanager="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-}}/cmdline-tools/latest/bin/sdkmanager"
+          sdk_root=${ANDROID_SDK_ROOT:-${ANDROID_HOME:-}}
+          sdkmanager="$sdk_root/cmdline-tools/latest/bin/sdkmanager"
           if [[ ! -x "$sdkmanager" ]]; then
             sdkmanager=$(command -v sdkmanager 2>/dev/null || true)
           fi
@@ -307,7 +410,6 @@ jobs:
           set +e
           set +u
           set +o pipefail
-
           if ! gradle --no-daemon --stacktrace --warning-mode=all \
               :app:testDebugUnitTest :app:lintRelease :app:assembleRelease; then
             printf 'STOP: release tests/lint/build failed. Source metadata has not been pushed.\n' >&2
@@ -319,8 +421,7 @@ jobs:
             printf 'STOP: signed release APK was not produced at %s.\n' "$apk" >&2
             exit 1
           fi
-
-          sdk_root="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-}}"
+          sdk_root=${ANDROID_SDK_ROOT:-${ANDROID_HOME:-}}
           apksigner="$sdk_root/build-tools/36.0.0/apksigner"
           aapt="$sdk_root/build-tools/36.0.0/aapt"
           if [[ ! -x "$apksigner" || ! -x "$aapt" ]]; then
@@ -341,7 +442,6 @@ jobs:
           package_name=$(printf '%s\n' "$badging" | sed -n "s/^package: name='\([^']*\)'.*/\1/p" | head -n 1)
           version_code=$(printf '%s\n' "$badging" | sed -n "s/^package: .* versionCode='\([^']*\)'.*/\1/p" | head -n 1)
           version_name=$(printf '%s\n' "$badging" | sed -n "s/^package: .* versionName='\([^']*\)'.*/\1/p" | head -n 1)
-
           if [[ "$package_name" != 'dev.ip.netveil' ]]; then
             printf 'STOP: APK package is %s; expected dev.ip.netveil.\n' "$package_name" >&2
             exit 1
@@ -354,15 +454,12 @@ jobs:
             printf 'STOP: APK versionCode is %s; expected %s.\n' "$version_code" "$RELEASE_VERSION_CODE" >&2
             exit 1
           fi
-
-          if ! unzip -Z1 "$apk" | grep -Fx 'META-INF/xposed/java_init.list' >/dev/null; then
-            printf 'STOP: APK is missing META-INF/xposed/java_init.list.\n' >&2
-            exit 1
-          fi
-          if ! unzip -Z1 "$apk" | grep -Fx 'META-INF/xposed/module.prop' >/dev/null; then
-            printf 'STOP: APK is missing META-INF/xposed/module.prop.\n' >&2
-            exit 1
-          fi
+          for entry in META-INF/xposed/java_init.list META-INF/xposed/module.prop; do
+            if ! unzip -Z1 "$apk" | grep -Fx "$entry" >/dev/null; then
+              printf 'STOP: APK is missing %s.\n' "$entry" >&2
+              exit 1
+            fi
+          done
           if "$aapt" dump permissions "$apk" | grep -F 'android.permission.INTERNET' >/dev/null; then
             printf 'STOP: release APK unexpectedly requests INTERNET permission.\n' >&2
             exit 1
@@ -378,17 +475,30 @@ jobs:
             printf 'STOP: failed to create SHA256SUMS.txt.\n' >&2
             exit 1
           fi
+          if ! (cd dist && sha256sum -c SHA256SUMS.txt); then
+            printf 'STOP: local release checksum verification failed.\n' >&2
+            exit 1
+          fi
+          apk_sha256=$(sha256sum "$output" | awk '{print $1}')
+          sums_sha256=$(sha256sum dist/SHA256SUMS.txt | awk '{print $1}')
+          if [[ ! "$apk_sha256" =~ ^[0-9a-f]{64}$ || ! "$sums_sha256" =~ ^[0-9a-f]{64}$ ]]; then
+            printf 'STOP: failed to resolve local SHA-256 digests.\n' >&2
+            exit 1
+          fi
           {
             printf 'apk=%s\n' "$output"
+            printf 'apk_name=%s\n' "$(basename "$output")"
             printf 'package_name=%s\n' "$package_name"
+            printf 'apk_sha256=%s\n' "$apk_sha256"
+            printf 'sums_sha256=%s\n' "$sums_sha256"
           } >> "$GITHUB_OUTPUT"
 
       - name: Preserve qualified release bundle
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: qualified-release-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
-            dist/${{ steps.build.outputs.package_name }}-${{ steps.version.outputs.release_tag }}.apk
+            ${{ steps.build.outputs.apk }}
             dist/SHA256SUMS.txt
           if-no-files-found: error
           retention-days: 14
@@ -405,9 +515,17 @@ jobs:
           set +e
           set +u
           set +o pipefail
-
-          release_sha=$(git rev-parse HEAD) || exit 1
+          release_sha=$(git rev-parse HEAD)
+          rc=$?
+          if ((rc != 0)); then
+            printf 'STOP: unable to resolve release source before metadata commit.\n' >&2
+            exit "$rc"
+          fi
           if [[ "$METADATA_CHANGED" == 'true' ]]; then
+            if git diff --quiet -- app/build.gradle.kts; then
+              printf 'STOP: release metadata was expected to change but app/build.gradle.kts is unchanged.\n' >&2
+              exit 1
+            fi
             git config user.name 'github-actions[bot]'
             git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
             git add -- app/build.gradle.kts
@@ -415,7 +533,12 @@ jobs:
               printf 'STOP: failed to commit release metadata.\n' >&2
               exit 1
             fi
-            release_sha=$(git rev-parse HEAD) || exit 1
+            release_sha=$(git rev-parse HEAD)
+            rc=$?
+            if ((rc != 0)); then
+              printf 'STOP: unable to resolve release metadata commit.\n' >&2
+              exit "$rc"
+            fi
             if ! git push --force-with-lease="refs/heads/${GITHUB_REF_NAME}:${SOURCE_SHA}" \
                 origin "HEAD:${GITHUB_REF_NAME}"; then
               printf 'STOP: default branch changed or release metadata push failed; release not published.\n' >&2
@@ -424,30 +547,150 @@ jobs:
           fi
           printf 'release_sha=%s\n' "$release_sha" >> "$GITHUB_OUTPUT"
 
-      - name: Recheck immutable release target
+      - name: Create or resume draft release
         env:
           GH_TOKEN: ${{ github.token }}
           RELEASE_TAG: ${{ steps.version.outputs.release_tag }}
+          RELEASE_SHA: ${{ steps.source.outputs.release_sha }}
+          PRERELEASE: ${{ inputs.prerelease }}
         shell: bash
         run: |
           set +e
           set +u
           set +o pipefail
-          if git ls-remote --exit-code --tags origin "refs/tags/${RELEASE_TAG}" >/dev/null 2>&1; then
-            printf 'STOP: git tag %s appeared while the release was building.\n' "$RELEASE_TAG" >&2
-            exit 1
-          fi
-          if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
-            printf 'STOP: GitHub Release %s appeared while the release was building.\n' "$RELEASE_TAG" >&2
+          if ! git fetch --tags origin >/dev/null 2>&1; then
+            printf 'STOP: unable to refresh tags before publication.\n' >&2
             exit 1
           fi
 
-      - name: Publish GitHub Release
+          existing_release=false
+          existing_draft=false
+          if gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            existing_release=true
+            existing_draft=$(gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --json isDraft --jq '.isDraft')
+            rc=$?
+            if ((rc != 0)); then
+              printf 'STOP: unable to inspect release %s before publication.\n' "$RELEASE_TAG" >&2
+              exit "$rc"
+            fi
+            if [[ "$existing_draft" != 'true' ]]; then
+              printf 'STOP: published release %s appeared while building.\n' "$RELEASE_TAG" >&2
+              exit 1
+            fi
+          fi
+
+          tag_sha=$(git ls-remote --refs origin "refs/tags/${RELEASE_TAG}" | awk 'NR==1 {print $1}')
+          if [[ "$existing_release" == 'true' ]]; then
+            if [[ -z "$tag_sha" || "$tag_sha" != "$RELEASE_SHA" ]]; then
+              printf 'STOP: resumable draft tag %s points to %s; expected %s.\n' \
+                "$RELEASE_TAG" "${tag_sha:-missing}" "$RELEASE_SHA" >&2
+              exit 1
+            fi
+            printf 'Resuming existing draft release %s.\n' "$RELEASE_TAG"
+          else
+            if [[ -n "$tag_sha" ]]; then
+              printf 'STOP: tag %s appeared without a draft release while building.\n' "$RELEASE_TAG" >&2
+              exit 1
+            fi
+            args=(
+              release create "$RELEASE_TAG"
+              --repo "$GITHUB_REPOSITORY"
+              --target "$RELEASE_SHA"
+              --title "NetVeil ${RELEASE_TAG}"
+              --generate-notes
+              --draft
+            )
+            if [[ "$PRERELEASE" == 'true' ]]; then
+              args+=(--prerelease)
+            fi
+            if ! gh "${args[@]}"; then
+              printf 'STOP: failed to create draft release %s.\n' "$RELEASE_TAG" >&2
+              exit 1
+            fi
+          fi
+
+          ready=false
+          for attempt in 1 2 3 4 5 6 7 8 9 10; do
+            draft_state=$(gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --json isDraft --jq '.isDraft' 2>/dev/null)
+            rc=$?
+            tag_sha=$(git ls-remote --refs origin "refs/tags/${RELEASE_TAG}" | awk 'NR==1 {print $1}')
+            if ((rc == 0)) && [[ "$draft_state" == 'true' && "$tag_sha" == "$RELEASE_SHA" ]]; then
+              ready=true
+              break
+            fi
+            printf 'Draft readiness check %s/10 not ready yet.\n' "$attempt"
+            sleep 2
+          done
+          if [[ "$ready" != 'true' ]]; then
+            printf 'STOP: draft release/tag did not become consistently available for %s.\n' "$RELEASE_TAG" >&2
+            exit 1
+          fi
+
+      - name: Upload and verify release asset digests
         env:
           GH_TOKEN: ${{ github.token }}
           RELEASE_TAG: ${{ steps.version.outputs.release_tag }}
-          RELEASE_SHA: ${{ steps.source.outputs.release_sha }}
           RELEASE_APK: ${{ steps.build.outputs.apk }}
+          RELEASE_APK_NAME: ${{ steps.build.outputs.apk_name }}
+          EXPECTED_APK_SHA256: ${{ steps.build.outputs.apk_sha256 }}
+          EXPECTED_SUMS_SHA256: ${{ steps.build.outputs.sums_sha256 }}
+        shell: bash
+        run: |
+          set +e
+          set +u
+          set +o pipefail
+
+          uploaded=false
+          for attempt in 1 2 3; do
+            if gh release upload "$RELEASE_TAG" "$RELEASE_APK" dist/SHA256SUMS.txt \
+                --repo "$GITHUB_REPOSITORY" --clobber; then
+              uploaded=true
+              break
+            fi
+            printf 'Release asset upload attempt %s/3 failed; retrying bounded draft upload.\n' "$attempt" >&2
+            sleep 2
+          done
+          if [[ "$uploaded" != 'true' ]]; then
+            printf 'STOP: release asset upload failed after 3 attempts; draft retained for a safe retry.\n' >&2
+            exit 1
+          fi
+
+          expected_apk_digest="sha256:${EXPECTED_APK_SHA256}"
+          expected_sums_digest="sha256:${EXPECTED_SUMS_SHA256}"
+          verified=false
+          for attempt in 1 2 3 4 5 6 7 8 9 10; do
+            assets_json=$(gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --json assets 2>/dev/null)
+            rc=$?
+            if ((rc == 0)); then
+              apk_count=$(jq --arg name "$RELEASE_APK_NAME" '[.assets[] | select(.name == $name)] | length' <<< "$assets_json")
+              sums_count=$(jq '[.assets[] | select(.name == "SHA256SUMS.txt")] | length' <<< "$assets_json")
+              apk_digest=$(jq -r --arg name "$RELEASE_APK_NAME" '.assets[] | select(.name == $name) | .digest // empty' <<< "$assets_json")
+              sums_digest=$(jq -r '.assets[] | select(.name == "SHA256SUMS.txt") | .digest // empty' <<< "$assets_json")
+              unexpected=$(jq -r --arg apk "$RELEASE_APK_NAME" '.assets[].name | select(. != $apk and . != "SHA256SUMS.txt")' <<< "$assets_json")
+              if [[ "$apk_count" == '1' && "$sums_count" == '1' \
+                    && "$apk_digest" == "$expected_apk_digest" \
+                    && "$sums_digest" == "$expected_sums_digest" \
+                    && -z "$unexpected" ]]; then
+                verified=true
+                break
+              fi
+            fi
+            printf 'Remote asset digest check %s/10 not ready yet.\n' "$attempt"
+            sleep 2
+          done
+          if [[ "$verified" != 'true' ]]; then
+            printf 'STOP: remote release assets did not converge to the exact qualified digests.\n' >&2
+            printf 'STOP: expected APK=%s sums=%s\n' "$expected_apk_digest" "$expected_sums_digest" >&2
+            printf 'STOP: observed APK=%s sums=%s unexpected=%s\n' \
+              "${apk_digest:-missing}" "${sums_digest:-missing}" "${unexpected:-none}" >&2
+            exit 1
+          fi
+          printf 'Remote release asset SHA-256 digests verified.\n'
+
+      - name: Finalise requested release state
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ steps.version.outputs.release_tag }}
           DRAFT: ${{ inputs.draft }}
           PRERELEASE: ${{ inputs.prerelease }}
         shell: bash
@@ -455,25 +698,80 @@ jobs:
           set +e
           set +u
           set +o pipefail
-          args=(
-            release create "$RELEASE_TAG"
-            "$RELEASE_APK"
-            dist/SHA256SUMS.txt
+          edit_args=(
+            release edit "$RELEASE_TAG"
             --repo "$GITHUB_REPOSITORY"
-            --target "$RELEASE_SHA"
             --title "NetVeil ${RELEASE_TAG}"
-            --generate-notes
           )
-          if [[ "$DRAFT" == 'true' ]]; then
-            args+=(--draft)
-          fi
           if [[ "$PRERELEASE" == 'true' ]]; then
-            args+=(--prerelease)
+            edit_args+=(--prerelease)
+          else
+            edit_args+=(--prerelease=false)
           fi
-          if ! gh "${args[@]}"; then
-            printf 'STOP: GitHub Release publication failed. Source metadata remains committed for an explicit-version retry.\n' >&2
+          if [[ "$DRAFT" == 'true' ]]; then
+            edit_args+=(--draft)
+          else
+            edit_args+=(--draft=false)
+          fi
+          if ! gh "${edit_args[@]}"; then
+            printf 'STOP: failed to apply requested release state; inspect the retained release before retrying.\n' >&2
             exit 1
           fi
+
+          actual_draft=$(gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --json isDraft --jq '.isDraft')
+          rc=$?
+          if ((rc != 0)); then
+            printf 'STOP: unable to verify final draft state.\n' >&2
+            exit "$rc"
+          fi
+          actual_prerelease=$(gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --json isPrerelease --jq '.isPrerelease')
+          rc=$?
+          if ((rc != 0)); then
+            printf 'STOP: unable to verify final prerelease state.\n' >&2
+            exit "$rc"
+          fi
+          if [[ "$actual_draft" != "$DRAFT" ]]; then
+            printf 'STOP: release draft state is %s; expected %s.\n' "$actual_draft" "$DRAFT" >&2
+            exit 1
+          fi
+          if [[ "$actual_prerelease" != "$PRERELEASE" ]]; then
+            printf 'STOP: release prerelease state is %s; expected %s.\n' "$actual_prerelease" "$PRERELEASE" >&2
+            exit 1
+          fi
+
+      - name: Final release verification
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ steps.version.outputs.release_tag }}
+          RELEASE_SHA: ${{ steps.source.outputs.release_sha }}
+          RELEASE_APK_NAME: ${{ steps.build.outputs.apk_name }}
+          EXPECTED_APK_SHA256: ${{ steps.build.outputs.apk_sha256 }}
+          EXPECTED_SUMS_SHA256: ${{ steps.build.outputs.sums_sha256 }}
+        shell: bash
+        run: |
+          set +e
+          set +u
+          set +o pipefail
+          tag_sha=$(git ls-remote --refs origin "refs/tags/${RELEASE_TAG}" | awk 'NR==1 {print $1}')
+          if [[ "$tag_sha" != "$RELEASE_SHA" ]]; then
+            printf 'STOP: final tag %s points to %s; expected %s.\n' \
+              "$RELEASE_TAG" "${tag_sha:-missing}" "$RELEASE_SHA" >&2
+            exit 1
+          fi
+          assets_json=$(gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --json assets)
+          rc=$?
+          if ((rc != 0)); then
+            printf 'STOP: unable to inspect final release assets.\n' >&2
+            exit "$rc"
+          fi
+          apk_digest=$(jq -r --arg name "$RELEASE_APK_NAME" '.assets[] | select(.name == $name) | .digest // empty' <<< "$assets_json")
+          sums_digest=$(jq -r '.assets[] | select(.name == "SHA256SUMS.txt") | .digest // empty' <<< "$assets_json")
+          if [[ "$apk_digest" != "sha256:${EXPECTED_APK_SHA256}" \
+                || "$sums_digest" != "sha256:${EXPECTED_SUMS_SHA256}" ]]; then
+            printf 'STOP: final release asset digests changed after qualification.\n' >&2
+            exit 1
+          fi
+          printf 'Release %s verified at %s with exact asset digests.\n' "$RELEASE_TAG" "$RELEASE_SHA"
 
       - name: Release summary
         if: always()
@@ -484,6 +782,7 @@ jobs:
           VERSION_SOURCE: ${{ steps.version.outputs.version_source }}
           RELEASE_SHA: ${{ steps.source.outputs.release_sha }}
           PACKAGE_NAME: ${{ steps.build.outputs.package_name }}
+          RESUME_DRAFT: ${{ steps.version.outputs.resume_draft }}
         shell: bash
         run: |
           {
@@ -495,8 +794,9 @@ jobs:
             printf -- '- Version source: `%s`\n' "${VERSION_SOURCE:-unresolved}"
             printf -- '- Android package: `%s`\n' "${PACKAGE_NAME:-unresolved}"
             printf -- '- Release source: `%s`\n' "${RELEASE_SHA:-not-pushed}"
-            printf -- '- Draft: `%s`\n' '${{ inputs.draft }}'
-            printf -- '- Prerelease: `%s`\n' '${{ inputs.prerelease }}'
+            printf -- '- Resumed draft: `%s`\n' "${RESUME_DRAFT:-false}"
+            printf -- '- Draft requested: `%s`\n' '${{ inputs.draft }}'
+            printf -- '- Prerelease requested: `%s`\n' '${{ inputs.prerelease }}'
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Remove signing material

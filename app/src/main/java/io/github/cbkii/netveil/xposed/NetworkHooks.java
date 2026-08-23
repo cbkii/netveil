@@ -18,7 +18,6 @@ import io.github.cbkii.netveil.config.Ipv4;
 import io.github.cbkii.netveil.config.Profile;
 import io.github.libxposed.api.XposedInterface;
 
-import java.lang.reflect.Field;
 import java.lang.reflect.Method;
 import java.net.DatagramSocket;
 import java.net.Inet4Address;
@@ -49,6 +48,8 @@ final class NetworkHooks {
     private final Inet4Address network;
     private final Inet4Address broadcast;
     private final List<InetAddress> dns;
+    private final XposedInterface.Invoker<?, Method> networkInfoGetTypeOrigin;
+    private final XposedInterface.Invoker<?, Method> networkCapabilitiesHasTransportOrigin;
 
     private final Map<RouteInfo, RouteMask> routeMasks =
             Collections.synchronizedMap(new WeakHashMap<>());
@@ -70,6 +71,9 @@ final class NetworkHooks {
         List<InetAddress> values = new ArrayList<>();
         for (String value : profile.dns) values.add(Ipv4.parse(value));
         this.dns = Collections.unmodifiableList(values);
+        this.networkInfoGetTypeOrigin = originalInvoker(NetworkInfo.class, "getType");
+        this.networkCapabilitiesHasTransportOrigin =
+                originalInvoker(NetworkCapabilities.class, "hasTransport", int.class);
         this.presentationInterface = selectPresentationInterface();
     }
 
@@ -476,10 +480,10 @@ final class NetworkHooks {
     }
 
     private int rawLegacyNetworkType(NetworkInfo info) {
+        if (networkInfoGetTypeOrigin == null) return Integer.MIN_VALUE;
         try {
-            Field field = NetworkInfo.class.getDeclaredField("mNetworkType");
-            field.setAccessible(true);
-            return field.getInt(info);
+            Object value = networkInfoGetTypeOrigin.invoke(info);
+            return value instanceof Integer ? (Integer) value : Integer.MIN_VALUE;
         } catch (Throwable ignored) {
             return Integer.MIN_VALUE;
         }
@@ -714,11 +718,10 @@ final class NetworkHooks {
     }
 
     private boolean rawHasTransport(NetworkCapabilities capabilities, int transport) {
+        if (networkCapabilitiesHasTransportOrigin == null) return false;
         try {
-            Field field = NetworkCapabilities.class.getDeclaredField("mTransportTypes");
-            field.setAccessible(true);
-            long mask = field.getLong(capabilities);
-            return (mask & (1L << transport)) != 0;
+            Object value = networkCapabilitiesHasTransportOrigin.invoke(capabilities, transport);
+            return value instanceof Boolean && (Boolean) value;
         } catch (Throwable ignored) {
             return false;
         }
@@ -800,6 +803,19 @@ final class NetworkHooks {
         String text = ((value >>> 24) & 0xff) + "." + ((value >>> 16) & 0xff) + "."
                 + ((value >>> 8) & 0xff) + "." + (value & 0xff);
         return Ipv4.parse(text);
+    }
+
+    private XposedInterface.Invoker<?, Method> originalInvoker(
+            Class<?> owner, String name, Class<?>... params) {
+        try {
+            Method method = owner.getDeclaredMethod(name, params);
+            XposedInterface.Invoker<?, Method> invoker = module.getInvoker(method);
+            invoker.setType(XposedInterface.Invoker.Type.ORIGIN);
+            return invoker;
+        } catch (Throwable t) {
+            module.log(Log.WARN, TAG, "original invoker unavailable: " + owner.getName() + "." + name, t);
+            return null;
+        }
     }
 
     private interface Transformer {
