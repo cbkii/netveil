@@ -12,6 +12,7 @@ import java.util.concurrent.ConcurrentHashMap;
 
 public final class NetVeilModule extends XposedModule {
     private static final String TAG = "NetVeil";
+    private static final String MODULE_PACKAGE = "dev.ip.netveil";
 
     private final Set<String> installedPackages = ConcurrentHashMap.newKeySet();
     private String processName = "";
@@ -24,7 +25,7 @@ public final class NetVeilModule extends XposedModule {
     @Override
     public void onPackageLoaded(PackageLoadedParam param) {
         String pkg = param.getPackageName();
-        if (pkg.equals(getApplicationInfo().packageName)) return;
+        if (MODULE_PACKAGE.equals(pkg)) return;
 
         try {
             SharedPreferences prefs = getRemotePreferences(ConfigKeys.PREFS);
