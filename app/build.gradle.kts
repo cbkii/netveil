@@ -53,6 +53,13 @@ android {
         }
     }
 
+    lint {
+        // NetVeil is an Xposed module whose hook implementation intentionally inspects
+        // selected framework internals. Keep the exception narrow: all other lint
+        // checks remain enabled and hidden-API findings outside NetworkHooks still fail.
+        lintConfig = file("lint.xml")
+    }
+
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
