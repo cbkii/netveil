@@ -31,7 +31,7 @@ jobs:
         with:
           gradle-version: '9.5.0'
 
-      - name: Repository sanity
+      - name: Repository and workflow sanity
         shell: bash
         run: |
           set +e
@@ -59,6 +59,10 @@ jobs:
             printf 'ERROR: applicationId is not dev.ip.netveil.\n' >&2
             failed=$((failed + 1))
           fi
+          if ! ruby -e 'require "yaml"; ARGV.each { |f| Psych.safe_load(File.read(f), permitted_classes: [], permitted_symbols: [], aliases: false); puts "OK #{f}" }' .github/workflows/*.yml; then
+            printf 'ERROR: one or more GitHub workflow YAML files are invalid.\n' >&2
+            failed=$((failed + 1))
+          fi
           if ((failed > 0)); then
             exit 1
           fi
@@ -81,7 +85,7 @@ jobs:
             exit 1
           fi
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v6
         with:
           name: netveil-debug-${{ github.sha }}
           path: app/build/outputs/apk/debug/app-debug.apk
