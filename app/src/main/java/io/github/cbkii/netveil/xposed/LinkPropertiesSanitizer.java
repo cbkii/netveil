@@ -6,6 +6,7 @@ import android.net.LinkProperties;
 import android.net.ProxyInfo;
 import android.net.RouteInfo;
 
+import io.github.cbkii.netveil.config.Ipv4;
 import io.github.cbkii.netveil.network.InterfaceClassifier;
 
 import java.net.Inet6Address;
@@ -84,8 +85,7 @@ final class LinkPropertiesSanitizer {
         RouteInfo connected = factory.route(
                 new IpPrefix(profile.network, profile.source.prefixLength), null, iface);
         RouteInfo defaultRoute = factory.route(
-                new IpPrefix(profile.ipv4.getAddress().length == 4 ? "0.0.0.0/0" : "0.0.0.0/0"),
-                profile.gateway, iface);
+                new IpPrefix(Ipv4.parse("0.0.0.0"), 0), profile.gateway, iface);
         origin.callByName(out, "addRoute", connected);
         origin.callByName(out, "addRoute", defaultRoute);
     }
