@@ -12,9 +12,16 @@ public class Ipv4Test {
         assertTrue(Ipv4.isLiteral("192.168.1.2"));
         assertTrue(Ipv4.isLiteral("0.0.0.0"));
         assertTrue(Ipv4.isLiteral("255.255.255.255"));
+        assertTrue(Ipv4.isLiteral("192.168.001.002"));
         assertFalse(Ipv4.isLiteral("256.1.1.1"));
         assertFalse(Ipv4.isLiteral("example.com"));
         assertFalse(Ipv4.isLiteral("1.2.3"));
+    }
+
+    @Test
+    public void canonicalizesEquivalentNumericForms() {
+        assertEquals("192.168.1.2", Ipv4.canonical(" 192.168.001.002 "));
+        assertEquals(Ipv4.parse("192.168.1.2"), Ipv4.parse("192.168.001.002"));
     }
 
     @Test
@@ -30,8 +37,10 @@ public class Ipv4Test {
     }
 
     @Test
-    public void networkAddressIsDerivedCorrectly() {
+    public void networkAndBroadcastAreDerivedCorrectly() {
         assertEquals("192.168.7.0", Ipv4.networkAddress("192.168.7.93", 24));
         assertEquals("10.20.0.0", Ipv4.networkAddress("10.20.31.42", 16));
+        assertEquals("192.168.7.255", Ipv4.broadcastAddress("192.168.7.93", 24));
+        assertEquals("255.255.255.0", Ipv4.netmask(24).getHostAddress());
     }
 }

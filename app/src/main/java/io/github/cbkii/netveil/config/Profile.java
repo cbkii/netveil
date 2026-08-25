@@ -87,8 +87,10 @@ public final class Profile {
         if (raw == null || raw.trim().isEmpty()) return Collections.emptyList();
         List<String> out = new ArrayList<>();
         for (String part : raw.split("[\\r\\n,]+")) {
-            String s = part.trim();
-            if (!s.isEmpty() && Ipv4.isLiteral(s) && !out.contains(s)) out.add(s);
+            String value = part.trim();
+            if (value.isEmpty() || !Ipv4.isLiteral(value)) continue;
+            String canonical = Ipv4.canonical(value);
+            if (!out.contains(canonical)) out.add(canonical);
         }
         return Collections.unmodifiableList(out);
     }
@@ -104,11 +106,13 @@ public final class Profile {
     }
 
     public static boolean hasCompatibleGateway(List<String> ips, List<String> gateways, int prefix) {
-        return !compatibleIps(ips, gateways, prefix).isEmpty();
+        return !compatibleIps(canonicalize(ips), canonicalize(gateways), prefix).isEmpty();
     }
 
     public static boolean allIpsHaveCompatibleGateway(List<String> ips, List<String> gateways, int prefix) {
-        return !ips.isEmpty() && compatibleIps(ips, gateways, prefix).size() == ips.size();
+        List<String> canonicalIps = canonicalize(ips);
+        return !canonicalIps.isEmpty()
+                && compatibleIps(canonicalIps, canonicalize(gateways), prefix).size() == canonicalIps.size();
     }
 
     private static List<String> compatibleIps(List<String> ips, List<String> gateways, int prefix) {
@@ -122,6 +126,17 @@ public final class Profile {
             }
         }
         return eligible;
+    }
+
+    private static List<String> canonicalize(List<String> values) {
+        List<String> out = new ArrayList<>();
+        if (values == null) return out;
+        for (String value : values) {
+            if (!Ipv4.isLiteral(value)) continue;
+            String canonical = Ipv4.canonical(value);
+            if (!out.contains(canonical)) out.add(canonical);
+        }
+        return out;
     }
 
     private static int clampPrefix(int p) {
@@ -140,9 +155,9 @@ public final class Profile {
 
         private Resolved(String ipv4, String gateway, List<String> dns, int prefixLength,
                          boolean hideVpn, boolean hideProxy, boolean hideIpv6, long selectionSeed) {
-            this.ipv4 = ipv4;
-            this.gateway = gateway;
-            this.dns = dns;
+            this.ipv4 = Ipv4.canonical(ipv4);
+            this.gateway = Ipv4.canonical(gateway);
+            this.dns = Collections.unmodifiableList(new ArrayList<>(dns));
             this.prefixLength = prefixLength;
             this.hideVpn = hideVpn;
             this.hideProxy = hideProxy;
