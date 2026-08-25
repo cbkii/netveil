@@ -73,8 +73,24 @@ final class FrameworkObjectFactory {
         return result instanceof String ? (String) result : String.valueOf(result);
     }
 
+    /**
+     * Write a projected framework object transactionally.
+     *
+     * <p>Android framework parcel writers can fail after advancing/writing the destination. The
+     * outer protective hook may then fall back to the raw object's writer, so leaving partial
+     * projected bytes in place would corrupt the Parcel. Restore both size and cursor before
+     * propagating any failure.</p>
+     */
     void writeToParcelOrigin(Object value, Parcel parcel, int flags) throws Throwable {
-        origin.callByName(value, "writeToParcel", parcel, flags);
+        int position = parcel.dataPosition();
+        int size = parcel.dataSize();
+        try {
+            origin.callByName(value, "writeToParcel", parcel, flags);
+        } catch (Throwable t) {
+            parcel.setDataSize(size);
+            parcel.setDataPosition(Math.min(position, size));
+            throw t;
+        }
     }
 
     private <T> T construct(Constructor<T> constructor, Object... args) throws Throwable {
