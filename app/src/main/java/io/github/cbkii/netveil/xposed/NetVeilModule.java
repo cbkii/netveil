@@ -37,6 +37,7 @@ public final class NetVeilModule extends XposedModule {
             return;
         }
 
+        LegacyNetworkInfoHooks legacyHooks = null;
         try {
             SharedPreferences prefs = getRemotePreferences(ConfigKeys.PREFS);
             Profile.Resolved profile = Profile.load(prefs, pkg).resolve();
@@ -46,9 +47,16 @@ public final class NetVeilModule extends XposedModule {
                 return;
             }
 
+            // Install the legacy Parcelable projection first. If the main hook graph fails its
+            // required-hook transaction, roll this smaller transaction back as well so a process
+            // never runs with a half-installed NetVeil identity.
+            legacyHooks = new LegacyNetworkInfoHooks(this, profile);
+            String legacyHealth = legacyHooks.install();
             String health = new NetworkHooks(this, profile).install();
-            log(Log.INFO, TAG, "active package=" + pkg + " process=" + processName + " " + health);
+            log(Log.INFO, TAG, "active package=" + pkg + " process=" + processName
+                    + " " + health + " " + legacyHealth);
         } catch (Throwable t) {
+            if (legacyHooks != null) legacyHooks.uninstall();
             // Never let a later package loaded into this process claim a second identity.
             log(Log.ERROR, TAG, "initialisation failed package=" + pkg + " process=" + processName, t);
         }
