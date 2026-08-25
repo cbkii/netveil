@@ -21,6 +21,8 @@ import java.util.List;
  * therefore insufficient for a coherent app-visible projection.</p>
  */
 final class LegacyNetworkInfoHooks {
+    private static final int LEGACY_TYPE_NONE = -1;
+
     private final NetVeilModule module;
     private final OriginAccess origin;
     private final VirtualNetworkProfile model;
@@ -98,8 +100,8 @@ final class LegacyNetworkInfoHooks {
 
     private NetworkInfo project(NetworkInfo original) throws Throwable {
         if (original == null || !isRawVpn(original)) return original;
-        Object projectedType = presentationLegacyType(ConnectivityManager.TYPE_NONE);
-        if (!(projectedType instanceof Integer) || (Integer) projectedType == ConnectivityManager.TYPE_NONE) {
+        Object projectedType = presentationLegacyType(LEGACY_TYPE_NONE);
+        if (!(projectedType instanceof Integer) || (Integer) projectedType == LEGACY_TYPE_NONE) {
             throw new IllegalStateException("presentation transport unresolved");
         }
 
