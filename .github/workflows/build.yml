@@ -67,27 +67,83 @@ jobs:
             exit 1
           fi
 
-      - name: Unit tests, release lint and debug APK
+      - name: Create ephemeral CI release key
         shell: bash
         run: |
-          if ! gradle --no-daemon --stacktrace --warning-mode=all \
-              :app:testDebugUnitTest :app:lintRelease :app:assembleDebug; then
-            printf 'ERROR: tests, release lint or debug build failed.\n' >&2
+          set -euo pipefail
+          keytool -genkeypair -noprompt \
+            -keystore "$GITHUB_WORKSPACE/ci-release.jks" \
+            -storepass ci-netveil-password \
+            -keypass ci-netveil-password \
+            -alias netveil-ci \
+            -keyalg RSA -keysize 2048 -validity 2 \
+            -dname 'CN=NetVeil CI,O=cbkii,C=AU'
+          cat > keystore.properties <<EOF
+          storeFile=$GITHUB_WORKSPACE/ci-release.jks
+          storePassword=ci-netveil-password
+          keyAlias=netveil-ci
+          keyPassword=ci-netveil-password
+          EOF
+
+      - name: Unit tests, release lint and APK builds
+        shell: bash
+        run: |
+          set -euo pipefail
+          gradle --no-daemon --stacktrace --warning-mode=all \
+            :app:testDebugUnitTest \
+            :app:lintRelease \
+            :app:assembleDebug \
+            :app:assembleRelease
+
+      - name: Verify debug and signed release APKs
+        shell: bash
+        run: |
+          set -euo pipefail
+          debug_apk='app/build/outputs/apk/debug/app-debug.apk'
+          release_apk='app/build/outputs/apk/release/app-release.apk'
+          for apk in "$debug_apk" "$release_apk"; do
+            if [[ ! -s "$apk" ]]; then
+              printf 'ERROR: expected APK is missing: %s\n' "$apk" >&2
+              exit 1
+            fi
+          done
+
+          build_tools="$(find "$ANDROID_HOME/build-tools" -mindepth 1 -maxdepth 1 -type d | sort -V | tail -n1)"
+          if [[ -z "$build_tools" || ! -x "$build_tools/apksigner" || ! -x "$build_tools/aapt" ]]; then
+            printf 'ERROR: Android build-tools verification binaries are unavailable.\n' >&2
             exit 1
           fi
 
-      - name: Verify debug APK exists
-        shell: bash
-        run: |
-          apk='app/build/outputs/apk/debug/app-debug.apk'
-          if [[ ! -s "$apk" ]]; then
-            printf 'ERROR: expected debug APK is missing: %s\n' "$apk" >&2
+          "$build_tools/apksigner" verify --verbose --print-certs "$release_apk"
+          badging="$("$build_tools/aapt" dump badging "$release_apk")"
+          grep -F "package: name='dev.ip.netveil'" <<<"$badging" >/dev/null || {
+            printf 'ERROR: release APK package is not dev.ip.netveil.\n' >&2
+            exit 1
+          }
+          unzip -l "$release_apk" | grep -F 'META-INF/xposed/java_init.list' >/dev/null || {
+            printf 'ERROR: java_init.list missing from release APK.\n' >&2
+            exit 1
+          }
+          unzip -l "$release_apk" | grep -F 'META-INF/xposed/module.prop' >/dev/null || {
+            printf 'ERROR: module.prop missing from release APK.\n' >&2
+            exit 1
+          }
+          if "$build_tools/aapt" dump permissions "$release_apk" | grep -F 'android.permission.INTERNET'; then
+            printf 'ERROR: release APK unexpectedly requests INTERNET.\n' >&2
             exit 1
           fi
+          sha256sum "$debug_apk" "$release_apk"
+
+      - name: Remove ephemeral signing material
+        if: always()
+        shell: bash
+        run: rm -f ci-release.jks keystore.properties
 
       - uses: actions/upload-artifact@v6
         with:
-          name: netveil-debug-${{ github.sha }}
-          path: app/build/outputs/apk/debug/app-debug.apk
+          name: netveil-ci-apks-${{ github.sha }}
+          path: |
+            app/build/outputs/apk/debug/app-debug.apk
+            app/build/outputs/apk/release/app-release.apk
           if-no-files-found: error
           retention-days: 14
