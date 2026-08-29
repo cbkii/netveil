@@ -2,9 +2,11 @@ package io.github.cbkii.netveil;
 
 import android.app.Activity;
 import android.content.SharedPreferences;
+import android.graphics.Insets;
 import android.os.Bundle;
 import android.text.InputType;
 import android.view.ViewGroup;
+import android.view.WindowInsets;
 import android.widget.Button;
 import android.widget.CheckBox;
 import android.widget.EditText;
@@ -49,6 +51,20 @@ public final class MainActivity extends Activity {
         int pad = dp(18);
         root.setPadding(pad, pad, pad, pad);
         scroll.addView(root);
+
+        // Android 15 enforces edge-to-edge for targetSdk 35+. Keep the simple programmatic UI
+        // clear of status/navigation bars and display cutouts without adding AndroidX solely for
+        // inset handling.
+        scroll.setOnApplyWindowInsetsListener((view, insets) -> {
+            Insets bars = insets.getInsets(
+                    WindowInsets.Type.systemBars() | WindowInsets.Type.displayCutout());
+            root.setPadding(
+                    pad + bars.left,
+                    pad + bars.top,
+                    pad + bars.right,
+                    pad + bars.bottom);
+            return insets;
+        });
 
         root.addView(text("NetVeil", 24));
         root.addView(text(
@@ -104,6 +120,7 @@ public final class MainActivity extends Activity {
 
         refreshIndex();
         setContentView(scroll);
+        scroll.requestApplyInsets();
     }
 
     private void loadProfile() {

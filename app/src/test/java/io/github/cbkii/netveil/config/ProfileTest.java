@@ -10,15 +10,15 @@ import static org.junit.Assert.assertTrue;
 
 public class ProfileTest {
     @Test
-    public void listParserRejectsNonIpv4GarbageAndDuplicates() {
+    public void listParserRejectsGarbageAndCanonicalizesDuplicates() {
         assertEquals(
                 List.of("10.0.0.2", "10.0.0.3"),
-                Profile.parseList("10.0.0.2, bad\n10.0.0.3,10.0.0.2"));
+                Profile.parseList("10.0.0.2, bad\n10.0.0.3,10.0.000.002"));
     }
 
     @Test
-    public void dnsLinesAreIndependentSets() {
-        var sets = Profile.parseDnsSets("1.1.1.1,1.0.0.1\n9.9.9.9");
+    public void dnsLinesAreIndependentCanonicalSets() {
+        var sets = Profile.parseDnsSets("1.1.1.1,1.0.0.1\n009.009.009.009");
         assertEquals(2, sets.size());
         assertEquals(2, sets.get(0).size());
         assertEquals("9.9.9.9", sets.get(1).get(0));
@@ -33,13 +33,13 @@ public class ProfileTest {
     }
 
     @Test
-    public void gatewayCompatibilityRequiresSameSubnetAndDifferentAddress() {
+    public void gatewayCompatibilityUsesNumericIdentity() {
         assertTrue(Profile.hasCompatibleGateway(
-                List.of("192.168.50.20"), List.of("192.168.50.1"), 24));
+                List.of("192.168.050.020"), List.of("192.168.50.1"), 24));
         assertFalse(Profile.hasCompatibleGateway(
                 List.of("192.168.50.20"), List.of("192.168.60.1"), 24));
         assertFalse(Profile.hasCompatibleGateway(
-                List.of("192.168.50.20"), List.of("192.168.50.20"), 24));
+                List.of("192.168.050.020"), List.of("192.168.50.20"), 24));
     }
 
     @Test

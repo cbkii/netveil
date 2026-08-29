@@ -17,6 +17,7 @@ fun releaseProperty(name: String): String =
 android {
     namespace = "io.github.cbkii.netveil"
     compileSdk = 36
+    enableKotlin = false
 
     defaultConfig {
         applicationId = "dev.ip.netveil"
