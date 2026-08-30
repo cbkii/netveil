@@ -14,10 +14,42 @@ generator = importlib.util.module_from_spec(spec)
 assert spec.loader is not None
 spec.loader.exec_module(generator)
 
+PUBLIC_FIXTURES = (
+    "8.8.8.8", "1.1.1.1", "9.9.9.9", "208.67.222.222",
+    "8.8.4.4", "1.0.0.1", "149.112.112.112", "208.67.220.220",
+)
+
+
+def candidate(ip: str, asn: int = 64500) -> dict:
+    return {
+        "ipv4": ip,
+        "confidence": "high",
+        "known_vpn": False,
+        "known_proxy": False,
+        "known_tor": False,
+        "provider": "Fixture access network",
+        "asn": asn,
+    }
+
+
+def valid_pack() -> dict:
+    return {
+        "schema": 1,
+        "generated_at": "2026-08-31T00:00:00Z",
+        "countries": {
+            code: [candidate(ip, 64500 + country_i) for ip in PUBLIC_FIXTURES]
+            for country_i, code in enumerate(generator.COUNTRIES)
+        },
+    }
+
 
 class CountryGeneratorTests(unittest.TestCase):
-    def test_rir_country_allocation(self):
-        text = "arin|US|ipv4|8.8.8.0|256|20200101|allocated\narin|CA|ipv4|1.1.1.0|256|20200101|allocated\n"
+    def test_rir_country_allocation_uses_only_active_statuses(self):
+        text = (
+            "arin|US|ipv4|8.8.8.0|256|20200101|allocated\n"
+            "arin|US|ipv4|9.9.9.0|256|20200101|available\n"
+            "arin|CA|ipv4|1.1.1.0|256|20200101|allocated\n"
+        )
         self.assertEqual([ipaddress.ip_network("8.8.8.0/24")], generator.parse_rir(text, "US"))
 
     def test_proxy_and_tor_parsing(self):
@@ -46,16 +78,20 @@ class CountryGeneratorTests(unittest.TestCase):
         self.assertNotEqual(network.network_address, first)
         self.assertNotEqual(network.broadcast_address, first)
 
-    def test_validate_pack_rejects_reserved_candidate(self):
-        pack = {
-            "schema": 1,
-            "countries": {
-                code: [{"ipv4": f"8.8.{i}.8"} for i in range(8)]
-                for code in generator.COUNTRIES
-            },
-        }
+    def test_validate_pack_accepts_complete_pack_and_rejects_reserved_candidate(self):
+        pack = valid_pack()
         generator.validate_pack(pack)
-        pack["countries"]["AU"][0] = {"ipv4": "192.168.1.2"}
+        pack["countries"]["AU"][0] = candidate("192.168.1.2")
+        with self.assertRaises(generator.SourceError):
+            generator.validate_pack(pack)
+
+    def test_validate_pack_rejects_missing_provenance_or_flags(self):
+        pack = valid_pack()
+        del pack["countries"]["FR"][0]["known_tor"]
+        with self.assertRaises(generator.SourceError):
+            generator.validate_pack(pack)
+        pack = valid_pack()
+        pack["countries"]["GB"][0]["asn"] = 0
         with self.assertRaises(generator.SourceError):
             generator.validate_pack(pack)
 
@@ -69,33 +105,13 @@ class CountryGeneratorTests(unittest.TestCase):
             self.assertLessEqual(len(pack["countries"][country]), generator.MAX_OUTPUT_PER_COUNTRY)
 
     def test_unchanged_pack_is_read_without_normalisation_loss(self):
-        countries = {
-            code: [
-                {
-                    "ipv4": f"8.{country_i + 1}.{i}.8",
-                    "confidence": "high",
-                    "known_vpn": False,
-                    "known_proxy": False,
-                    "known_tor": False,
-                    "provider": "Fixture",
-                    "asn": 64500 + country_i,
-                }
-                for i in range(8)
-            ]
-            for country_i, code in enumerate(generator.COUNTRIES)
-        }
+        pack = valid_pack()
+        pack["exclusion_sources_available"] = {"vpn": True, "tor": True, "proxy": True}
         with tempfile.TemporaryDirectory() as td:
             path = Path(td) / "pack.json"
-            path.write_text(
-                json.dumps({
-                    "schema": 1,
-                    "generated_at": "2026-01-01T00:00:00Z",
-                    "countries": countries,
-                }),
-                encoding="utf-8",
-            )
+            path.write_text(json.dumps(pack), encoding="utf-8")
             loaded = generator.load_existing(path)
-            self.assertEqual(countries, loaded["countries"])
+            self.assertEqual(pack, loaded)
 
 
 if __name__ == "__main__":
