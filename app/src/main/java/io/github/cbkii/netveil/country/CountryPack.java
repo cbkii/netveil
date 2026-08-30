@@ -11,6 +11,7 @@ import java.time.temporal.ChronoUnit;
 import java.time.format.DateTimeParseException;
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.Iterator;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -54,7 +55,9 @@ public final class CountryPack {
         }
 
         JSONObject rawCountries = root.getJSONObject("countries");
-        Set<String> suppliedCountries = rawCountries.keySet();
+        Set<String> suppliedCountries = new LinkedHashSet<>();
+        Iterator<String> countryKeys = rawCountries.keys();
+        while (countryKeys.hasNext()) suppliedCountries.add(countryKeys.next());
         if (!suppliedCountries.equals(new LinkedHashSet<>(REQUIRED_COUNTRIES))) {
             throw new JSONException("Country set differs from supported AU/US/GB/ID/FR schema");
         }
