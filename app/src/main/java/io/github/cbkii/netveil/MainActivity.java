@@ -81,7 +81,7 @@ public final class MainActivity extends Activity {
     private String selectedTarget = ConfigKeys.GLOBAL;
     private String editorLoadedFor;
     private long currentSeed;
-    private boolean loading;
+    private boolean loading = true;
 
     @Override
     public void onCreate(Bundle state) {
@@ -443,19 +443,34 @@ public final class MainActivity extends Activity {
         toast("Saved. Restart scoped app process(es) to apply.");
     }
 
+    /**
+     * Reconcile editable selector text with the loaded model before any write.
+     * A changed target is loaded first; the user must review it and press Save again. This prevents
+     * unsaved Global/custom form contents being accidentally written under a newly typed package.
+     */
     private boolean resolveManualTargetIfNeeded() {
-        if (isGlobal()) return true;
         String raw = targetField.getText().toString().trim();
-        TargetEntry known = findTarget(selectedTarget);
-        if (known != null && raw.equals(known.toString())) return true;
-        if (raw.equals(selectedTarget) && isPackageName(raw)) return true;
-        if (isPackageName(raw)) {
-            selectedTarget = raw;
-            editorLoadedFor = null;
-            loadSelectedTarget();
+        TargetEntry current = findTarget(selectedTarget);
+        if (current != null && raw.equals(current.toString())) return true;
+        if (raw.equals(selectedTarget)
+                && (ConfigKeys.GLOBAL.equals(selectedTarget) || isPackageName(selectedTarget))) {
             return true;
         }
-        targetField.setError("Enter a valid package name");
+
+        for (TargetEntry entry : targets) {
+            if (raw.equals(entry.toString()) || raw.equals(entry.target)) {
+                selectTarget(entry.target);
+                toast("Target loaded. Review the profile, then press Save again.");
+                return false;
+            }
+        }
+        if (isPackageName(raw)) {
+            selectTarget(raw);
+            toast("Target loaded. Review the profile, then press Save again.");
+            return false;
+        }
+        targetField.setError("Choose a listed profile or enter a valid package such as org.example.app");
+        targetField.requestFocus();
         return false;
     }
 
@@ -634,7 +649,7 @@ public final class MainActivity extends Activity {
                     + "\n\nEach scoped package derives its own stable selection from the Global seed until Reroll.");
             return;
         }
-        Profile.Resolved resolved = isGlobal() ? draft.resolve() : draft.resolve();
+        Profile.Resolved resolved = draft.resolve();
         preview.setText((isGlobal() ? "Global profile" : appNameLine()) + "\n"
                 + resolvedText(resolved) + "\n" + privacyText()
                 + "\n\nApplies only to Vector / LSPosed-scoped processes.");
