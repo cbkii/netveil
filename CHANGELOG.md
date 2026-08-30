@@ -2,6 +2,17 @@
 
 ## Unreleased — v1 hardening
 
+- Add **All scoped apps (Global)** as the first/default profile while keeping Vector/LSPosed scope as the authoritative outer execution gate.
+- Add per-app `INHERIT_GLOBAL`, `CUSTOM`, and `DISABLED` policy resolution; pre-Global package profiles preserve upgrade behaviour by defaulting to `CUSTOM`.
+- Replace the blank package-name-first screen with a searchable target selector containing Global, saved/custom entries, launchable installed apps, and manual package entry fallback without `QUERY_ALL_PACKAGES`.
+- Replace independent IPv4/gateway whitelists with complete `NetworkIdentity` objects so randomisation cannot mix unrelated topology values.
+- Add route-hidden identities as the default: arbitrary IPv4 values no longer require a gateway, prefix, or `/0` workaround, and projected `LinkProperties` omit synthetic IPv4 routes.
+- Retain Explicit virtual-network mode for coherent IPv4/prefix/gateway topology with same-subnet validation and an explicit `/0` warning.
+- Make Global randomisation deterministic per package by deriving the effective seed from the Global base seed plus actual package name; Custom profiles retain their own reroll seed.
+- Add conservative migration for legacy independent IP/gateway/prefix profiles: unambiguous one-gateway mappings may become Explicit; ambiguous or unmatched mappings become route-hidden rather than guessed.
+- Add persistent field labels, inline identity/DNS validation, resolved-profile preview, invalid-field focus/scroll, and safer target switching so editable selector text cannot silently retarget unsaved form data.
+- Keep direct in-app Vector/LSPosed scope management out of the API-101 baseline because the current official `libxposed/service` line is API 102; framework Manager remains the authoritative scope UI.
+- Add Global/Custom/Disabled resolution, identity/migration, route-mode, `/0`/`/31`/`/32`, DNS and deterministic-seed tests plus expanded physical UX/device-matrix coverage.
 - Enforce one immutable NetVeil profile per app process and explicitly reject `system_server` scope.
 - Canonicalise IPv4 configuration numerically and preserve package-stable whitelist randomisation.
 - Centralise Wi-Fi/cellular/Ethernet/CLAT/VPN interface classification and remove the hard-coded `wlan0` fallback.
