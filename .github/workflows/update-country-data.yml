@@ -4,6 +4,12 @@ on:
   workflow_dispatch:
   schedule:
     - cron: '23 3 * * *'
+  pull_request:
+    paths:
+      - '.github/scripts/generate_country_pack.py'
+      - '.github/scripts/test_generate_country_pack.py'
+      - '.github/workflows/update-country-data.yml'
+      - 'app/src/main/assets/country-ip-pack.json'
 
 permissions:
   contents: write
@@ -20,7 +26,7 @@ jobs:
       - uses: actions/checkout@v6
         with:
           fetch-depth: 0
-          persist-credentials: true
+          persist-credentials: ${{ github.event_name != 'pull_request' }}
 
       - uses: actions/setup-python@v6
         with:
@@ -63,7 +69,7 @@ jobs:
           fi
 
       - name: Commit changed validated pack
-        if: steps.generate.outputs.live_ok == 'true'
+        if: steps.generate.outputs.live_ok == 'true' && github.event_name != 'pull_request'
         shell: bash
         run: |
           if git diff --quiet -- app/src/main/assets/country-ip-pack.json; then
@@ -92,10 +98,13 @@ jobs:
       - name: Summary
         if: always()
         shell: bash
+        env:
+          LIVE_OK: ${{ steps.generate.outputs.live_ok }}
         run: |
+          result="${LIVE_OK:-not-run}"
           {
             printf '## Country data refresh\n\n'
-            printf -- '- Live regeneration: `%s`\n' '${{ steps.generate.outputs.live_ok || 'not-run' }}'
+            printf -- '- Live regeneration: `%s`\n' "$result"
             printf -- '- Countries: `AU US GB ID FR`\n'
             printf -- '- Existing validated pack remains authoritative when optional/live sources fail.\n'
           } >> "$GITHUB_STEP_SUMMARY"
