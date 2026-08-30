@@ -30,6 +30,12 @@ A release candidate must satisfy all of these invariants:
 - Custom-profile randomisation remains package-local and stable until explicitly rerolled;
 - a reroll can select only whole configured identities and whole configured DNS sets;
 - legacy independent IPv4/gateway/prefix profiles migrate conservatively: exactly one compatible gateway may become Explicit; ambiguous or unmatched mappings become route-hidden rather than guessed;
+- country presets support AU/US/GB/ID/FR and feed the same canonical `NetworkIdentity` model as manual entries rather than adding a separate hook path;
+- country imports are route-hidden and never infer a gateway/prefix from RIR/BGP/provider data;
+- country-provider confidence filtering and known VPN/proxy/Tor exclusion are enabled by default but remain user-opt-out selection policies;
+- country-data refresh never rewrites saved profiles automatically and uses valid refreshed cache -> valid previous cache -> bundled APK data as its failure hierarchy;
+- downloaded country packs are bounded HTTPS input and fail closed on invalid schema/timestamp/country set/count/public-IP/provenance/anonymity metadata or rollback to older data;
+- automatic country-data refresh is disabled by default; when enabled its default is Monthly with Weekly/Daily choices and failures do not create a separate retry cadence;
 - no hard-coded `wlan0` fallback: the physical presentation interface must resolve from the process network environment;
 - CLAT `v4-*` interfaces are collapsed to their underlying Wi-Fi/cellular interface before transport classification;
 - only raw VPN `NetworkCapabilities` objects receive VPN-specific sanitisation;
@@ -56,18 +62,21 @@ The current official `libxposed/service` line is API 102. Direct in-app scope qu
 Every PR and `main` build must run:
 
 1. workflow/source sanity checks;
-2. JVM unit tests, including Global/Custom/Disabled resolution and migration tests;
-3. unsuppressed `lintRelease`;
-4. debug APK assembly;
-5. release APK assembly using an ephemeral non-production signing key;
-6. `apksigner` verification of the CI release APK;
-7. package identity check for `dev.ip.netveil`;
-8. modern `META-INF/xposed/java_init.list` and `META-INF/xposed/module.prop` checks;
-9. assertion that the APK does not request `android.permission.INTERNET`;
-10. assertion that broad package visibility such as `QUERY_ALL_PACKAGES` has not been introduced;
-11. artifact SHA-256 output and CI artifact preservation.
+2. deterministic country-generator tests plus bundled-pack schema/source validation;
+3. JVM unit tests, including Global/Custom/Disabled resolution, migration and country-pack parsing/filtering tests;
+4. unsuppressed `lintRelease`;
+5. debug APK assembly;
+6. release APK assembly using an ephemeral non-production signing key;
+7. `apksigner` verification of the CI release APK;
+8. package identity check for `dev.ip.netveil`;
+9. modern `META-INF/xposed/java_init.list` and `META-INF/xposed/module.prop` checks;
+10. bundled `assets/country-ip-pack.json` presence/validation;
+11. an **exact** Android permission allow-list containing only the intended permissions, currently `android.permission.INTERNET` and `android.permission.RECEIVE_BOOT_COMPLETED`, and no broad `QUERY_ALL_PACKAGES` visibility;
+12. artifact SHA-256 output, APK-size output and CI artifact preservation.
 
-The production Manual Release workflow remains the only workflow allowed to use the repository release-signing secrets.
+The country-data workflow additionally performs a bounded live-source regeneration check. Pull-request validation is read-only and may publish the generated pack only as an audit artifact; repository write permission is confined to scheduled/manual update execution.
+
+The production Manual Release workflow remains the only workflow allowed to use the repository release-signing secrets, and it must enforce the same package/Xposed/country-pack/permission contract on the exact release APK bytes.
 
 ## Physical compatibility matrix
 
@@ -153,6 +162,21 @@ Load a pre-Global v1.0.x preference snapshot/profile.
 - saving the migrated profile writes the structured identity representation;
 - legacy fields remain readable until explicit profile reset/removal for rollback/debug inspection.
 
+### Country IPv4 presets and refresh
+
+Using Global and then a Custom override:
+
+- AU, US, GB, ID and FR all populate candidates from the bundled pack with default filtering;
+- default high-confidence and known VPN/proxy/Tor exclusions are enabled and can be independently opted out;
+- **Add** preserves/deduplicates existing manual identities while **Replace** changes only the network identity list;
+- every imported candidate is route-hidden and no gateway/prefix is fabricated;
+- offline/airplane-mode use falls back to bundled/cached data;
+- **Refresh country data now** runs off the UI thread and updates only a fully validated, non-older app-private cache;
+- malformed, oversized, stale, unsupported, special-address or otherwise invalid remote data leaves the prior valid data untouched;
+- automatic refresh is off by default, defaults to Monthly when enabled, supports Weekly/Daily, survives reboot when enabled and never rewrites saved profiles;
+- failed periodic refresh stays on the configured cadence rather than scheduling an extra retry series;
+- if the configured HTTPS pack endpoint is not anonymously readable, refresh failure is isolated from profile editing/use and bundled data remains functional.
+
 ### Transport/state combinations
 
 - Wi-Fi without VPN;
@@ -203,6 +227,7 @@ On Android 15 and Android 16:
 - inline identity and DNS errors remain visible and actionable;
 - Save focuses/scrolls the first invalid field;
 - resolved preview agrees with Global/Custom/Disabled policy and selected route mode;
+- country controls remain usable without exposing per-ISP/ASN management complexity and explain why Internet access exists;
 - edge-to-edge, display cutouts, gesture navigation, three-button navigation, landscape and large font/display scaling remain usable.
 
 ## Expected negative/native probes
@@ -223,12 +248,14 @@ If these requirements expand, that is a separate native/system backend project a
 A v1 APK is release-ready only when:
 
 - all required CI gates are green on the exact release-source commit;
+- country generator/bundled-pack validation and the live-source check are green, with optional-source degradation explicitly reported rather than silently treated as authoritative exclusion coverage;
 - Global/Custom/Disabled precedence and legacy migration behave as documented;
 - route-hidden identities do not require a fake gateway/prefix and do not synthesize IPv4 routes;
 - Explicit identities remain internally coherent across DHCP, routes, getters, strings and Parcel views;
+- country presets preserve Add/Replace semantics, offline fallback, strict downloaded-pack validation and the user-selected refresh cadence;
 - no required hook fails installation on the physical matrix;
 - no unexpected protective fallback appears in the target-app logs during the matrix;
 - all supported Java/framework probes agree with the configured effective virtual identity;
 - real routing/public egress is unchanged by NetVeil;
 - known native/kernel disclosures match the documented boundary;
-- the production-signed APK passes package/version/signature/Xposed-metadata/checksum verification in Manual Release.
+- the production-signed APK passes package/version/signature/Xposed-metadata/country-pack/permission/checksum verification in Manual Release.
