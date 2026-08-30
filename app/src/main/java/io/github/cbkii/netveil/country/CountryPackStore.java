@@ -46,9 +46,14 @@ public final class CountryPackStore {
         Path cache = context.getFilesDir().toPath().resolve(CACHE_NAME);
         Path temp = context.getFilesDir().toPath().resolve(CACHE_NAME + ".tmp");
         try {
+            CountryPack current = loadBest(context).pack;
             byte[] bytes = fetchHttps(UPDATE_URL);
             String text = new String(bytes, StandardCharsets.UTF_8);
             CountryPack parsed = CountryPack.parse(text);
+            if (!parsed.isAtLeastAsNewAs(current)) {
+                throw new IOException("downloaded country pack is older than the current valid data");
+            }
+
             Files.write(temp, bytes);
             try {
                 Files.move(temp, cache, StandardCopyOption.REPLACE_EXISTING,
