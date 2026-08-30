@@ -133,6 +133,27 @@ Test once without a VPN and once with the normal VPN active.
 - [ ] resolved preview agrees with the effective Global/Custom/Disabled policy.
 - [ ] Android 15/16 edge-to-edge, gesture navigation, three-button navigation, landscape and large display/font scaling remain usable.
 
+## Country IPv4 presets and refresh
+
+Exercise the feature once on Global and once on a Custom override. Country presets are a configuration population source, not a separate runtime hook path.
+
+- [ ] AU, US, GB, ID and FR each produce at least one candidate with the default filters.
+- [ ] **Exclude medium/low-confidence providers** is enabled by default and relaxing it can add eligible lower-confidence candidates without altering other profile settings.
+- [ ] **Exclude known VPN / proxy / Tor addresses** is enabled by default and its opt-out affects only country candidate selection.
+- [ ] **Add to list** preserves existing manual identities, canonicalises/deduplicates candidates and imports them as route-hidden identities.
+- [ ] **Replace list** changes only network identities; DNS/privacy/randomisation/profile policy remain untouched until the normal Save action.
+- [ ] imported identities never invent an ISP gateway/prefix and save without the historical `/0` workaround.
+- [ ] bundled data works with airplane mode/no network.
+- [ ] **Refresh country data now** is asynchronous and does not block the main UI thread.
+- [ ] successful refresh validates and atomically replaces only the app-private cache, then updates the displayed data timestamp/source.
+- [ ] malformed, oversized, stale, unsupported-schema or non-public-address remote data is rejected and the previous valid pack remains usable.
+- [ ] HTTP/TLS/endpoint failure leaves the existing cached/bundled data usable and shows a persistent last-refresh warning.
+- [ ] automatic refresh is disabled by default; enabling it defaults to Monthly and allows Weekly/Daily.
+- [ ] background refresh changes only the country-data cache and does not rewrite saved profile identities.
+- [ ] reboot with automatic refresh enabled retains the persisted JobScheduler cadence; with it disabled no country refresh job is active.
+- [ ] refresh failures do not create extra retry cadence beyond the selected periodic schedule.
+- [ ] if the configured pack endpoint is not anonymously readable, offline country presets remain usable and the limitation is reported as refresh failure rather than profile failure.
+
 ## Multi-module coexistence
 
 - [ ] establish NetVeil-only baseline.
@@ -145,6 +166,7 @@ Test once without a VPN and once with the normal VPN active.
 
 - [ ] debug and ephemeral-signed release APKs build successfully from the same source head.
 - [ ] release APK signature/package/Xposed metadata/permission checks pass.
+- [ ] bundled country pack is present in the APK and validates against the same schema/permission/source policy used by CI.
 - [ ] `WifiInfo`, `NetworkCapabilities`, `LinkProperties` and legacy `NetworkInfo` Parcel round-trips agree with their getter/string projections.
 - [ ] no custom NetVeil-only `toString()` format is observable for projected Android framework objects.
 
