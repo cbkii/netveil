@@ -6,6 +6,8 @@ import org.json.JSONArray;
 import org.json.JSONException;
 import org.json.JSONObject;
 
+import java.time.Instant;
+import java.time.format.DateTimeParseException;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.LinkedHashMap;
@@ -18,13 +20,18 @@ import java.util.Set;
 public final class CountryPack {
     public static final int SCHEMA = 1;
     public static final int DEFAULT_LIMIT = 12;
+    public static final int MIN_COUNTRY_CANDIDATES = 8;
+    public static final int MAX_COUNTRY_CANDIDATES = 64;
     public static final List<String> REQUIRED_COUNTRIES = List.of("AU", "US", "GB", "ID", "FR");
 
     public final String generatedAt;
+    private final Instant generatedInstant;
     private final Map<String, List<Candidate>> countries;
 
-    private CountryPack(String generatedAt, Map<String, List<Candidate>> countries) {
+    private CountryPack(String generatedAt, Instant generatedInstant,
+                        Map<String, List<Candidate>> countries) {
         this.generatedAt = generatedAt;
+        this.generatedInstant = generatedInstant;
         this.countries = Collections.unmodifiableMap(countries);
     }
 
@@ -35,36 +42,65 @@ public final class CountryPack {
         }
         String generatedAt = root.optString("generated_at", "").trim();
         if (generatedAt.isEmpty()) throw new JSONException("Missing generated_at");
+        final Instant generatedInstant;
+        try {
+            generatedInstant = Instant.parse(generatedAt);
+        } catch (DateTimeParseException e) {
+            throw new JSONException("Invalid generated_at timestamp");
+        }
+
         JSONObject rawCountries = root.getJSONObject("countries");
         Map<String, List<Candidate>> parsed = new LinkedHashMap<>();
         for (String code : REQUIRED_COUNTRIES) {
             JSONArray values = rawCountries.optJSONArray(code);
             if (values == null) throw new JSONException("Missing country " + code);
+            if (values.length() < MIN_COUNTRY_CANDIDATES
+                    || values.length() > MAX_COUNTRY_CANDIDATES) {
+                throw new JSONException("Country " + code + " candidate count is outside "
+                        + MIN_COUNTRY_CANDIDATES + ".." + MAX_COUNTRY_CANDIDATES);
+            }
+
             List<Candidate> candidates = new ArrayList<>();
             Set<String> seen = new LinkedHashSet<>();
             for (int i = 0; i < values.length(); i++) {
                 JSONObject value = values.getJSONObject(i);
                 String ipv4 = value.optString("ipv4", "").trim();
-                if (!Ipv4.isLiteral(ipv4)) continue;
-                ipv4 = Ipv4.canonical(ipv4);
-                if (!seen.add(ipv4)) continue;
-                String confidence = value.optString("confidence", "low").trim().toLowerCase();
-                if (!confidence.equals("high") && !confidence.equals("medium") && !confidence.equals("low")) {
-                    confidence = "low";
+                if (!Ipv4.isLiteral(ipv4)) {
+                    throw new JSONException("Invalid IPv4 candidate in " + code);
                 }
+                ipv4 = Ipv4.canonical(ipv4);
+                if (!isPublicCandidate(ipv4)) {
+                    throw new JSONException("Non-public/special IPv4 candidate in " + code + ": " + ipv4);
+                }
+                if (!seen.add(ipv4)) {
+                    throw new JSONException("Duplicate IPv4 candidate in " + code + ": " + ipv4);
+                }
+
+                String confidence = value.optString("confidence", "").trim().toLowerCase();
+                if (!confidence.equals("high") && !confidence.equals("medium")
+                        && !confidence.equals("low")) {
+                    throw new JSONException("Invalid confidence for " + code + " candidate " + ipv4);
+                }
+                if (!value.has("known_vpn") || !value.has("known_proxy") || !value.has("known_tor")) {
+                    throw new JSONException("Missing anonymity flags for " + code + " candidate " + ipv4);
+                }
+
                 candidates.add(new Candidate(
                         ipv4,
                         confidence,
-                        value.optBoolean("known_vpn", false),
-                        value.optBoolean("known_proxy", false),
-                        value.optBoolean("known_tor", false),
+                        value.getBoolean("known_vpn"),
+                        value.getBoolean("known_proxy"),
+                        value.getBoolean("known_tor"),
                         value.optString("provider", ""),
                         value.optInt("asn", 0)));
             }
-            if (candidates.isEmpty()) throw new JSONException("No valid candidates for " + code);
             parsed.put(code, Collections.unmodifiableList(candidates));
         }
-        return new CountryPack(generatedAt, parsed);
+        return new CountryPack(generatedAt, generatedInstant, parsed);
+    }
+
+    public boolean isAtLeastAsNewAs(CountryPack other) {
+        return other == null || !generatedInstant.isBefore(other.generatedInstant);
     }
 
     public List<Candidate> candidates(String countryCode, boolean highOnly,
@@ -79,6 +115,32 @@ public final class CountryPack {
             if (out.size() >= limit) break;
         }
         return Collections.unmodifiableList(out);
+    }
+
+    static boolean isPublicCandidate(String ipv4) {
+        if (!Ipv4.isLiteral(ipv4)) return false;
+        long value = Ipv4.toUnsignedLong(ipv4);
+        return !inCidr(value, "0.0.0.0", 8)
+                && !inCidr(value, "10.0.0.0", 8)
+                && !inCidr(value, "100.64.0.0", 10)
+                && !inCidr(value, "127.0.0.0", 8)
+                && !inCidr(value, "169.254.0.0", 16)
+                && !inCidr(value, "172.16.0.0", 12)
+                && !inCidr(value, "192.0.0.0", 24)
+                && !inCidr(value, "192.0.2.0", 24)
+                && !inCidr(value, "192.88.99.0", 24)
+                && !inCidr(value, "192.168.0.0", 16)
+                && !inCidr(value, "198.18.0.0", 15)
+                && !inCidr(value, "198.51.100.0", 24)
+                && !inCidr(value, "203.0.113.0", 24)
+                && !inCidr(value, "224.0.0.0", 4)
+                && !inCidr(value, "240.0.0.0", 4);
+    }
+
+    private static boolean inCidr(long value, String network, int prefix) {
+        long base = Ipv4.toUnsignedLong(network);
+        long mask = prefix == 0 ? 0L : ((0xffffffffL << (32 - prefix)) & 0xffffffffL);
+        return (value & mask) == (base & mask);
     }
 
     public static final class Candidate {
