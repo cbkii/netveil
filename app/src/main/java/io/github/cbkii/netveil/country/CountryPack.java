@@ -7,6 +7,7 @@ import org.json.JSONException;
 import org.json.JSONObject;
 
 import java.time.Instant;
+import java.time.temporal.ChronoUnit;
 import java.time.format.DateTimeParseException;
 import java.util.ArrayList;
 import java.util.Collections;
@@ -48,8 +49,16 @@ public final class CountryPack {
         } catch (DateTimeParseException e) {
             throw new JSONException("Invalid generated_at timestamp");
         }
+        if (generatedInstant.isAfter(Instant.now().plus(2, ChronoUnit.DAYS))) {
+            throw new JSONException("generated_at is implausibly far in the future");
+        }
 
         JSONObject rawCountries = root.getJSONObject("countries");
+        Set<String> suppliedCountries = rawCountries.keySet();
+        if (!suppliedCountries.equals(new LinkedHashSet<>(REQUIRED_COUNTRIES))) {
+            throw new JSONException("Country set differs from supported AU/US/GB/ID/FR schema");
+        }
+
         Map<String, List<Candidate>> parsed = new LinkedHashMap<>();
         for (String code : REQUIRED_COUNTRIES) {
             JSONArray values = rawCountries.optJSONArray(code);
@@ -81,18 +90,18 @@ public final class CountryPack {
                         && !confidence.equals("low")) {
                     throw new JSONException("Invalid confidence for " + code + " candidate " + ipv4);
                 }
-                if (!value.has("known_vpn") || !value.has("known_proxy") || !value.has("known_tor")) {
-                    throw new JSONException("Missing anonymity flags for " + code + " candidate " + ipv4);
+                boolean knownVpn = strictBoolean(value, "known_vpn", code, ipv4);
+                boolean knownProxy = strictBoolean(value, "known_proxy", code, ipv4);
+                boolean knownTor = strictBoolean(value, "known_tor", code, ipv4);
+                String provider = value.optString("provider", "").trim();
+                int asn = value.optInt("asn", 0);
+                if (provider.isEmpty() || asn <= 0) {
+                    throw new JSONException("Missing provider/ASN provenance for " + code
+                            + " candidate " + ipv4);
                 }
 
                 candidates.add(new Candidate(
-                        ipv4,
-                        confidence,
-                        value.getBoolean("known_vpn"),
-                        value.getBoolean("known_proxy"),
-                        value.getBoolean("known_tor"),
-                        value.optString("provider", ""),
-                        value.optInt("asn", 0)));
+                        ipv4, confidence, knownVpn, knownProxy, knownTor, provider, asn));
             }
             parsed.put(code, Collections.unmodifiableList(candidates));
         }
@@ -115,6 +124,16 @@ public final class CountryPack {
             if (out.size() >= limit) break;
         }
         return Collections.unmodifiableList(out);
+    }
+
+    private static boolean strictBoolean(JSONObject object, String key,
+                                         String country, String ipv4) throws JSONException {
+        Object raw = object.opt(key);
+        if (!(raw instanceof Boolean)) {
+            throw new JSONException("Invalid/missing " + key + " for " + country
+                    + " candidate " + ipv4);
+        }
+        return (Boolean) raw;
     }
 
     static boolean isPublicCandidate(String ipv4) {
