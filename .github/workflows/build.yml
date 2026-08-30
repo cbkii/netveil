@@ -56,6 +56,10 @@ jobs:
             printf 'ERROR: unexpected INTERNET permission found.\n' >&2
             failed=$((failed + 1))
           fi
+          if grep -R 'android.permission.QUERY_ALL_PACKAGES' -n app/src/main; then
+            printf 'ERROR: broad QUERY_ALL_PACKAGES visibility is not allowed.\n' >&2
+            failed=$((failed + 1))
+          fi
           if ! grep -F 'applicationId = "dev.ip.netveil"' app/build.gradle.kts >/dev/null; then
             printf 'ERROR: applicationId is not dev.ip.netveil.\n' >&2
             failed=$((failed + 1))
@@ -136,8 +140,13 @@ jobs:
             printf 'ERROR: module.prop missing from release APK.\n' >&2
             exit 1
           }
-          if "$build_tools/aapt" dump permissions "$release_apk" | grep -F 'android.permission.INTERNET'; then
+          permissions="$("$build_tools/aapt" dump permissions "$release_apk")"
+          if grep -F 'android.permission.INTERNET' <<<"$permissions"; then
             printf 'ERROR: release APK unexpectedly requests INTERNET.\n' >&2
+            exit 1
+          fi
+          if grep -F 'android.permission.QUERY_ALL_PACKAGES' <<<"$permissions"; then
+            printf 'ERROR: release APK unexpectedly requests QUERY_ALL_PACKAGES.\n' >&2
             exit 1
           fi
           sha256sum "$debug_apk" "$release_apk"
