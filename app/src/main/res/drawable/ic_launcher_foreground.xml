@@ -1,0 +1,45 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+
+    <!-- Upper IP identity. -->
+    <path
+        android:fillColor="#DDEEFF"
+        android:pathData="M26,21H82C84.8,21 87,23.2 87,26V32C87,34.8 84.8,37 82,37H26C23.2,37 21,34.8 21,32V26C21,23.2 23.2,21 26,21Z" />
+    <path
+        android:fillColor="#3B82F6"
+        android:pathData="M27,25H35V33H27ZM43,25H51V33H43ZM59,25H67V33H59ZM75,25H83V33H75Z" />
+
+    <!-- Crossing routes: teal under blue. -->
+    <path
+        android:fillColor="@android:color/transparent"
+        android:strokeColor="#14B8A6"
+        android:strokeWidth="7"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round"
+        android:pathData="M26,45C40,45 43,48 50,55C59,64 62,67 79,67" />
+    <path
+        android:fillColor="#14B8A6"
+        android:pathData="M78,60L87,67L78,74Z" />
+    <path
+        android:fillColor="@android:color/transparent"
+        android:strokeColor="#3B82F6"
+        android:strokeWidth="7"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round"
+        android:pathData="M26,67C40,67 43,64 50,57C59,48 62,45 79,45" />
+    <path
+        android:fillColor="#3B82F6"
+        android:pathData="M78,38L87,45L78,52Z" />
+
+    <!-- Lower IP identity. -->
+    <path
+        android:fillColor="#C9FFF2"
+        android:pathData="M26,71H82C84.8,71 87,73.2 87,76V82C87,84.8 84.8,87 82,87H26C23.2,87 21,84.8 21,82V76C21,73.2 23.2,71 26,71Z" />
+    <path
+        android:fillColor="#0FA99B"
+        android:pathData="M27,75H35V83H27ZM43,75H51V83H43ZM59,75H67V83H59ZM75,75H83V83H75Z" />
+</vector>
