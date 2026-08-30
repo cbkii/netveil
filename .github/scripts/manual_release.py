@@ -7,6 +7,10 @@ from pathlib import Path
 PKG = "dev.ip.netveil"
 BT = "36.0.0"
 SEMVER = re.compile(r"^[0-9]+\.[0-9]+\.[0-9]+(?:[.-][0-9A-Za-z][0-9A-Za-z.-]*)?$")
+ALLOWED_PERMISSIONS = {
+    "android.permission.INTERNET",
+    "android.permission.RECEIVE_BOOT_COMPLETED",
+}
 
 class ReleaseError(RuntimeError): pass
 
@@ -147,10 +151,12 @@ def qualify(root, tag, version, code, signer, aapt):
     if not vn or vn.group(1) != version: stop("APK versionName does not match requested release")
     if not vc or vc.group(1) != str(code): stop("APK versionCode does not match requested release")
     with zipfile.ZipFile(apk) as z:
-        for name in ("META-INF/xposed/java_init.list", "META-INF/xposed/module.prop"):
+        for name in ("META-INF/xposed/java_init.list", "META-INF/xposed/module.prop", "assets/country-ip-pack.json"):
             if name not in z.namelist(): stop(f"APK is missing {name}")
     perms = run([str(aapt), "dump", "permissions", str(apk)], capture=True).stdout or ""
-    if "android.permission.INTERNET" in perms: stop("release APK unexpectedly requests INTERNET permission")
+    actual_permissions = set(re.findall(r"uses-permission: name='([^']+)'", perms))
+    if actual_permissions != ALLOWED_PERMISSIONS:
+        stop(f"release APK permissions differ from allow-list: expected={sorted(ALLOWED_PERMISSIONS)} actual={sorted(actual_permissions)}")
     dist = root / "dist"; dist.mkdir(exist_ok=True)
     out = dist / f"{PKG}-{tag}.apk"; shutil.copy2(apk, out)
     ah = sha256(out); sums = dist / "SHA256SUMS.txt"; sums.write_text(f"{ah}  {out.name}\n", encoding="utf-8")
@@ -242,6 +248,8 @@ def selftest():
     for args,want in cases:
         got = choose_version(*args)
         if got != want: raise AssertionError((args, got, want))
+    if ALLOWED_PERMISSIONS != {"android.permission.INTERNET", "android.permission.RECEIVE_BOOT_COMPLETED"}:
+        raise AssertionError("release permission allow-list changed unexpectedly")
     info(f"manual release planner self-test: {len(cases)} cases passed")
 
 def main():

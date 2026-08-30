@@ -1,0 +1,101 @@
+name: Update Country Data
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '23 3 * * *'
+
+permissions:
+  contents: write
+
+concurrency:
+  group: netveil-country-data-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  update:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          persist-credentials: true
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.13'
+
+      - name: Validate generator and current fallback pack
+        shell: bash
+        run: |
+          failed=0
+          if ! python3 -m py_compile .github/scripts/generate_country_pack.py .github/scripts/test_generate_country_pack.py; then
+            printf 'ERROR: country-data Python syntax validation failed.\n' >&2
+            failed=1
+          fi
+          if ! python3 .github/scripts/generate_country_pack.py --self-test; then
+            printf 'ERROR: country generator self-test failed.\n' >&2
+            failed=1
+          fi
+          if ! python3 .github/scripts/test_generate_country_pack.py; then
+            printf 'ERROR: deterministic generator/current-pack tests failed.\n' >&2
+            failed=1
+          fi
+          if ((failed != 0)); then
+            exit 1
+          fi
+
+      - name: Regenerate from live public routing/provider sources
+        id: generate
+        shell: bash
+        run: |
+          output='app/src/main/assets/country-ip-pack.json'
+          if python3 .github/scripts/generate_country_pack.py --output "$output"; then
+            printf 'live_ok=true\n' >> "$GITHUB_OUTPUT"
+          else
+            printf '::warning::Live country-data regeneration failed; retaining the last validated bundled pack.\n'
+            printf 'live_ok=false\n' >> "$GITHUB_OUTPUT"
+          fi
+          if ! python3 .github/scripts/test_generate_country_pack.py; then
+            printf 'ERROR: no valid country-data pack remains after generation attempt.\n' >&2
+            exit 1
+          fi
+
+      - name: Commit changed validated pack
+        if: steps.generate.outputs.live_ok == 'true'
+        shell: bash
+        run: |
+          if git diff --quiet -- app/src/main/assets/country-ip-pack.json; then
+            printf 'Country candidate data is unchanged; no commit required.\n'
+            exit 0
+          fi
+
+          branch="$GITHUB_REF_NAME"
+          if [[ "$GITHUB_REF_TYPE" != 'branch' || -z "$branch" ]]; then
+            printf 'ERROR: updater must run from a branch; ref type is %s.\n' "$GITHUB_REF_TYPE" >&2
+            exit 1
+          fi
+          start_sha="$(git rev-parse HEAD)"
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -- app/src/main/assets/country-ip-pack.json
+          if ! git commit -m 'chore(data): refresh country IP candidates'; then
+            printf 'ERROR: validated country pack changed but commit failed.\n' >&2
+            exit 1
+          fi
+          if ! git push --force-with-lease="refs/heads/${branch}:${start_sha}" origin "HEAD:${branch}"; then
+            printf 'ERROR: branch changed or country-data push was rejected; no history was overwritten.\n' >&2
+            exit 1
+          fi
+
+      - name: Summary
+        if: always()
+        shell: bash
+        run: |
+          {
+            printf '## Country data refresh\n\n'
+            printf -- '- Live regeneration: `%s`\n' '${{ steps.generate.outputs.live_ok || 'not-run' }}'
+            printf -- '- Countries: `AU US GB ID FR`\n'
+            printf -- '- Existing validated pack remains authoritative when optional/live sources fail.\n'
+          } >> "$GITHUB_STEP_SUMMARY"

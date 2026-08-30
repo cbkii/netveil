@@ -31,7 +31,7 @@ jobs:
         with:
           gradle-version: '9.5.0'
 
-      - name: Repository and workflow sanity
+      - name: Repository, workflow and country-data sanity
         shell: bash
         run: |
           set +e
@@ -41,8 +41,11 @@ jobs:
           for path in \
             app/src/main/resources/META-INF/xposed/java_init.list \
             app/src/main/resources/META-INF/xposed/module.prop \
+            app/src/main/assets/country-ip-pack.json \
             app/lint.xml \
-            .github/scripts/manual_release.py; do
+            .github/scripts/manual_release.py \
+            .github/scripts/generate_country_pack.py \
+            .github/scripts/test_generate_country_pack.py; do
             if [[ ! -f "$path" ]]; then
               printf 'ERROR: required build input is missing: %s\n' "$path" >&2
               failed=$((failed + 1))
@@ -50,14 +53,6 @@ jobs:
           done
           if grep -R 'de.robv.android.xposed' -n app/src/main; then
             printf 'ERROR: legacy Xposed API reference found.\n' >&2
-            failed=$((failed + 1))
-          fi
-          if grep -R 'android.permission.INTERNET' -n app/src/main; then
-            printf 'ERROR: unexpected INTERNET permission found.\n' >&2
-            failed=$((failed + 1))
-          fi
-          if grep -R 'android.permission.QUERY_ALL_PACKAGES' -n app/src/main; then
-            printf 'ERROR: broad QUERY_ALL_PACKAGES visibility is not allowed.\n' >&2
             failed=$((failed + 1))
           fi
           if ! grep -F 'applicationId = "dev.ip.netveil"' app/build.gradle.kts >/dev/null; then
@@ -68,11 +63,20 @@ jobs:
             printf 'ERROR: one or more GitHub workflow YAML files are invalid.\n' >&2
             failed=$((failed + 1))
           fi
-          if ! python3 -m py_compile .github/scripts/manual_release.py; then
-            printf 'ERROR: manual release driver has invalid Python syntax.\n' >&2
+          if ! python3 -m py_compile .github/scripts/manual_release.py .github/scripts/generate_country_pack.py .github/scripts/test_generate_country_pack.py; then
+            printf 'ERROR: a release/country-data Python driver has invalid syntax.\n' >&2
             failed=$((failed + 1))
-          elif ! python3 .github/scripts/manual_release.py --self-test; then
+          fi
+          if ! python3 .github/scripts/manual_release.py --self-test; then
             printf 'ERROR: manual release planner self-test failed.\n' >&2
+            failed=$((failed + 1))
+          fi
+          if ! python3 .github/scripts/generate_country_pack.py --self-test; then
+            printf 'ERROR: country generator self-test failed.\n' >&2
+            failed=$((failed + 1))
+          fi
+          if ! python3 .github/scripts/test_generate_country_pack.py; then
+            printf 'ERROR: deterministic country generator/bundled-pack tests failed.\n' >&2
             failed=$((failed + 1))
           fi
           if ((failed > 0)); then
@@ -132,23 +136,29 @@ jobs:
             printf 'ERROR: release APK package is not dev.ip.netveil.\n' >&2
             exit 1
           }
-          unzip -l "$release_apk" | grep -F 'META-INF/xposed/java_init.list' >/dev/null || {
-            printf 'ERROR: java_init.list missing from release APK.\n' >&2
-            exit 1
-          }
-          unzip -l "$release_apk" | grep -F 'META-INF/xposed/module.prop' >/dev/null || {
-            printf 'ERROR: module.prop missing from release APK.\n' >&2
-            exit 1
-          }
-          permissions="$("$build_tools/aapt" dump permissions "$release_apk")"
-          if grep -F 'android.permission.INTERNET' <<<"$permissions"; then
-            printf 'ERROR: release APK unexpectedly requests INTERNET.\n' >&2
+          for entry in \
+            'META-INF/xposed/java_init.list' \
+            'META-INF/xposed/module.prop' \
+            'assets/country-ip-pack.json'; do
+            unzip -Z1 "$release_apk" | grep -Fx "$entry" >/dev/null || {
+              printf 'ERROR: %s missing from release APK.\n' "$entry" >&2
+              exit 1
+            }
+          done
+
+          permissions="$("$build_tools/aapt" dump permissions "$release_apk" \
+            | sed -n "s/^uses-permission: name='\([^']*\)'.*/\1/p" | sort -u)"
+          expected_permissions="$(printf '%s\n' \
+            android.permission.INTERNET \
+            android.permission.RECEIVE_BOOT_COMPLETED | sort)"
+          if [[ "$permissions" != "$expected_permissions" ]]; then
+            printf 'ERROR: release APK permissions differ from the exact allow-list.\nExpected:\n%s\nActual:\n%s\n' \
+              "$expected_permissions" "$permissions" >&2
             exit 1
           fi
-          if grep -F 'android.permission.QUERY_ALL_PACKAGES' <<<"$permissions"; then
-            printf 'ERROR: release APK unexpectedly requests QUERY_ALL_PACKAGES.\n' >&2
-            exit 1
-          fi
+
+          printf 'APK sizes:\n'
+          stat -c '%n %s bytes' "$debug_apk" "$release_apk"
           sha256sum "$debug_apk" "$release_apk"
 
       - name: Remove ephemeral signing material
