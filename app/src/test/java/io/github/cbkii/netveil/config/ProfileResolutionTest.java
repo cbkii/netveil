@@ -85,6 +85,32 @@ public class ProfileResolutionTest {
     }
 
     @Test
+    public void observedLegacySlashZeroWorkaroundMigratesFirstSelectionHidden() {
+        FakeSharedPreferences prefs = new FakeSharedPreferences();
+        String pkg = "org.schabi.newpipe";
+        prefs.edit()
+                .putBoolean(ConfigKeys.p(pkg, ConfigKeys.FIELD_ENABLED), true)
+                .putString(ConfigKeys.p(pkg, ConfigKeys.LEGACY_IPV4),
+                        "202.128.115.2\n1.129.22.61")
+                .putString(ConfigKeys.p(pkg, ConfigKeys.LEGACY_GATEWAYS),
+                        "192.168.1.1\n202.128.115.2")
+                .putInt(ConfigKeys.p(pkg, ConfigKeys.LEGACY_PREFIX), 0)
+                .putString(ConfigKeys.p(pkg, ConfigKeys.FIELD_DNS), "8.8.8.8\n1.1.1.1")
+                .commit();
+
+        Profile loaded = Profile.load(prefs, pkg);
+        assertEquals(2, loaded.identities.size());
+        assertEquals(NetworkIdentity.RouteMode.HIDDEN, loaded.identities.get(0).routeMode);
+        assertEquals(NetworkIdentity.RouteMode.HIDDEN, loaded.identities.get(1).routeMode);
+
+        Profile.Resolved resolved = Profile.resolveEffective(prefs, pkg);
+        assertNotNull(resolved);
+        assertEquals("202.128.115.2", resolved.ipv4);
+        assertEquals(NetworkIdentity.RouteMode.HIDDEN, resolved.routeMode);
+        assertEquals("0.0.0.0", resolved.gateway);
+    }
+
+    @Test
     public void globalRandomisationIsStablePerPackageAndDecorrelatedByPackage() {
         FakeSharedPreferences prefs = new FakeSharedPreferences();
         putProfile(prefs, ConfigKeys.GLOBAL, true, true, 777L,
