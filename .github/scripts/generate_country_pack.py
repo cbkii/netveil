@@ -46,6 +46,7 @@ PROVIDERS = {
            (15557, "SFR", "high"), (5410, "Bouygues Telecom", "high")],
 }
 
+
 class SourceError(RuntimeError):
     pass
 
@@ -83,7 +84,8 @@ def parse_rir(text: str, country: str) -> list[ipaddress.IPv4Network]:
         if not line or line.startswith("#"):
             continue
         parts = line.split("|")
-        if len(parts) < 7 or parts[1] != country or parts[2] != "ipv4":
+        if (len(parts) < 7 or parts[1] != country or parts[2] != "ipv4"
+                or parts[6].lower() not in {"allocated", "assigned"}):
             continue
         try:
             start = ipaddress.IPv4Address(parts[3])
@@ -173,6 +175,8 @@ def peeringdb_access_signal(payload: dict) -> bool:
 
 def route_prefixes(asn: int) -> list[ipaddress.IPv4Network]:
     payload = json.loads(fetch(ROUTEVIEWS.format(asn=asn), max_bytes=4 * 1024 * 1024))
+    if not isinstance(payload, list):
+        raise SourceError(f"unexpected RouteViews response for AS{asn}")
     out: list[ipaddress.IPv4Network] = []
     for raw in payload:
         try:
@@ -187,29 +191,35 @@ def route_prefixes(asn: int) -> list[ipaddress.IPv4Network]:
 def pdb_signal(asn: int) -> bool:
     try:
         payload = json.loads(fetch(PEERINGDB.format(asn=asn), attempts=2, max_bytes=512 * 1024))
+        if not isinstance(payload, dict):
+            raise SourceError("unexpected PeeringDB response")
         return peeringdb_access_signal(payload)
     except (SourceError, json.JSONDecodeError) as exc:
         log(f"WARN optional PeeringDB lookup failed for AS{asn}: {exc}")
         return False
 
 
-def exclusion_data() -> tuple[list[ipaddress.IPv4Network], set[ipaddress.IPv4Address], set[ipaddress.IPv4Address]]:
+def exclusion_data() -> tuple[list[ipaddress.IPv4Network], set[ipaddress.IPv4Address], set[ipaddress.IPv4Address], dict[str, bool]]:
     vpn: list[ipaddress.IPv4Network] = []
     tor: set[ipaddress.IPv4Address] = set()
     proxy: set[ipaddress.IPv4Address] = set()
+    availability = {"vpn": False, "tor": False, "proxy": False}
     try:
         vpn = parse_cidrs(fetch(VPN, attempts=2, max_bytes=2 * 1024 * 1024).decode("utf-8", "replace"))
+        availability["vpn"] = True
     except SourceError as exc:
         log(f"WARN optional VPN exclusion source unavailable: {exc}")
     try:
         tor = parse_tor(fetch(TOR, attempts=2, max_bytes=1024 * 1024).decode("utf-8", "replace"))
+        availability["tor"] = True
     except SourceError as exc:
         log(f"WARN optional Tor exclusion source unavailable: {exc}")
     try:
         proxy = parse_proxy(fetch(PROXY, attempts=2, max_bytes=2 * 1024 * 1024).decode("utf-8", "replace"))
+        availability["proxy"] = True
     except SourceError as exc:
         log(f"WARN optional proxy exclusion source unavailable: {exc}")
-    return vpn, tor, proxy
+    return vpn, tor, proxy, availability
 
 
 def round_robin(provider_candidates: list[list[dict]], limit: int) -> list[dict]:
@@ -277,25 +287,42 @@ def load_existing(path: Path) -> dict | None:
         value = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
         return None
-    return value if value.get("schema") == 1 else None
+    return value if isinstance(value, dict) and value.get("schema") == 1 else None
 
 
 def validate_pack(pack: dict) -> None:
     if pack.get("schema") != 1:
         raise SourceError("invalid schema")
+    generated_at = pack.get("generated_at")
+    if not isinstance(generated_at, str) or not generated_at.endswith("Z"):
+        raise SourceError("invalid generated_at")
     countries = pack.get("countries") or {}
+    if set(countries) != set(COUNTRIES):
+        raise SourceError("country set differs from AU/US/GB/ID/FR")
     for country in COUNTRIES:
         rows = countries.get(country)
-        if not isinstance(rows, list) or len(rows) < MIN_OUTPUT_PER_COUNTRY:
-            raise SourceError(f"{country} has only {0 if not isinstance(rows, list) else len(rows)} candidates")
+        if not isinstance(rows, list) or not (MIN_OUTPUT_PER_COUNTRY <= len(rows) <= MAX_OUTPUT_PER_COUNTRY):
+            raise SourceError(f"{country} candidate count is outside {MIN_OUTPUT_PER_COUNTRY}..{MAX_OUTPUT_PER_COUNTRY}")
         seen: set[str] = set()
         for row in rows:
-            address = ipaddress.ip_address(row.get("ipv4", ""))
+            if not isinstance(row, dict):
+                raise SourceError(f"{country} contains a non-object candidate")
+            try:
+                address = ipaddress.ip_address(row.get("ipv4", ""))
+            except ValueError as exc:
+                raise SourceError(f"{country} contains an invalid candidate") from exc
             if not isinstance(address, ipaddress.IPv4Address) or not address.is_global:
                 raise SourceError(f"{country} contains invalid/non-public candidate {address}")
             if str(address) in seen:
                 raise SourceError(f"{country} contains duplicate candidate {address}")
             seen.add(str(address))
+            if row.get("confidence") not in {"high", "medium", "low"}:
+                raise SourceError(f"{country} candidate {address} has invalid confidence")
+            for flag in ("known_vpn", "known_proxy", "known_tor"):
+                if not isinstance(row.get(flag), bool):
+                    raise SourceError(f"{country} candidate {address} has invalid {flag}")
+            if not isinstance(row.get("provider"), str) or not isinstance(row.get("asn"), int) or row["asn"] <= 0:
+                raise SourceError(f"{country} candidate {address} has invalid provider/ASN provenance")
 
 
 def generate(output: Path) -> bool:
@@ -311,7 +338,7 @@ def generate(output: Path) -> bool:
         if not allocations[country]:
             raise SourceError(f"no RIR IPv4 allocations found for {country}")
 
-    vpn, tor, proxy = exclusion_data()
+    vpn, tor, proxy, exclusion_availability = exclusion_data()
     countries: dict[str, list[dict]] = {}
     for country in COUNTRIES:
         log(f"[country] {country}")
@@ -325,9 +352,9 @@ def generate(output: Path) -> bool:
                 raise SourceError(f"{country} live generation produced only {len(values)} candidates")
         countries[country] = values
 
-    candidate_part = {"schema": 1, "countries": countries}
-    if existing and existing.get("countries") == countries:
-        log("No candidate changes; preserving existing generated_at and file bytes")
+    if existing and existing.get("countries") == countries \
+            and existing.get("exclusion_sources_available") == exclusion_availability:
+        log("No candidate/source-status changes; preserving existing generated_at and file bytes")
         return False
 
     pack = {
@@ -341,19 +368,22 @@ def generate(output: Path) -> bool:
             "X4BNet lists_vpn",
             "monosans proxy-list",
         ],
-        "countries": candidate_part["countries"],
+        "exclusion_sources_available": exclusion_availability,
+        "countries": countries,
     }
     validate_pack(pack)
     output.parent.mkdir(parents=True, exist_ok=True)
     temp = output.with_suffix(output.suffix + ".tmp")
     temp.write_text(json.dumps(pack, indent=2, sort_keys=False) + "\n", encoding="utf-8", newline="\n")
     temp.replace(output)
-    log("Generated " + ", ".join(f"{c}={len(countries[c])}" for c in COUNTRIES))
+    log("Generated " + ", ".join(f"{c}={len(countries[c])}" for c in COUNTRIES)
+        + " exclusions=" + ",".join(f"{k}:{'ok' if v else 'missing'}" for k, v in exclusion_availability.items()))
     return True
 
 
 def self_test() -> None:
-    sample = "arin|US|ipv4|8.8.8.0|256|20200101|allocated\n"
+    sample = ("arin|US|ipv4|8.8.8.0|256|20200101|allocated\n"
+              "arin|US|ipv4|9.9.9.0|256|20200101|available\n")
     nets = parse_rir(sample, "US")
     assert nets == [ipaddress.ip_network("8.8.8.0/24")]
     assert peeringdb_access_signal({"data": [{"info_types": ["Cable/DSL/ISP"]}]})
