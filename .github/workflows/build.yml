@@ -41,7 +41,8 @@ jobs:
           for path in \
             app/src/main/resources/META-INF/xposed/java_init.list \
             app/src/main/resources/META-INF/xposed/module.prop \
-            app/lint.xml; do
+            app/lint.xml \
+            .github/scripts/manual_release.py; do
             if [[ ! -f "$path" ]]; then
               printf 'ERROR: required build input is missing: %s\n' "$path" >&2
               failed=$((failed + 1))
@@ -61,6 +62,13 @@ jobs:
           fi
           if ! ruby -e 'require "yaml"; ARGV.each { |f| Psych.safe_load(File.read(f), permitted_classes: [], permitted_symbols: [], aliases: false); puts "OK #{f}" }' .github/workflows/*.yml; then
             printf 'ERROR: one or more GitHub workflow YAML files are invalid.\n' >&2
+            failed=$((failed + 1))
+          fi
+          if ! python3 -m py_compile .github/scripts/manual_release.py; then
+            printf 'ERROR: manual release driver has invalid Python syntax.\n' >&2
+            failed=$((failed + 1))
+          elif ! python3 .github/scripts/manual_release.py --self-test; then
+            printf 'ERROR: manual release planner self-test failed.\n' >&2
             failed=$((failed + 1))
           fi
           if ((failed > 0)); then
