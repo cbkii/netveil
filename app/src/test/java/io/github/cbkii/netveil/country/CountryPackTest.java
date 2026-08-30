@@ -78,6 +78,14 @@ public final class CountryPackTest {
     }
 
     @Test
+    public void missingBooleanOrProvenanceFailsClosed() {
+        String missingFlag = samplePack().replaceFirst("\"known_tor\":false,", "");
+        assertThrows(JSONException.class, () -> CountryPack.parse(missingFlag));
+        String missingProvider = samplePack().replaceFirst("\"provider\":\"Fixture ISP\",", "");
+        assertThrows(JSONException.class, () -> CountryPack.parse(missingProvider));
+    }
+
+    @Test
     public void generatedTimestampOrdersCacheAndBundle() throws Exception {
         CountryPack older = CountryPack.parse(samplePack().replace(
                 "2026-08-31T00:00:00Z", "2026-08-30T00:00:00Z"));
@@ -110,6 +118,6 @@ public final class CountryPackTest {
                                     boolean proxy, boolean tor) {
         return "{\"ipv4\":\"" + ip + "\",\"confidence\":\"" + confidence
                 + "\",\"known_vpn\":" + vpn + ",\"known_proxy\":" + proxy
-                + ",\"known_tor\":" + tor + "}";
+                + ",\"known_tor\":" + tor + ",\"provider\":\"Fixture ISP\",\"asn\":64500}";
     }
 }
