@@ -56,6 +56,9 @@ public final class CountryPresetPanel {
         root.addView(text(
                 "Adds a small representative list of ISP/access-provider IPv4 candidates. "
                         + "Gateway/routes stay hidden; NetVeil never probes candidate addresses.", 12));
+        root.addView(text(
+                "Internet access is used only to download NetVeil's public country-data pack. "
+                        + "Profiles, installed-app lists and device/network identifiers are not uploaded.", 12));
 
         root.addView(text("Country", 13));
         country = spinner(COUNTRY_LABELS);
@@ -115,11 +118,13 @@ public final class CountryPresetPanel {
         autoRefresh.setOnCheckedChangeListener((buttonView, checked) -> {
             CountryRefreshScheduler.configure(activity, checked, selectedFrequency());
             frequency.setEnabled(checked);
+            updateStatus();
         });
         frequency.setOnItemSelectedListener(new AdapterView.OnItemSelectedListener() {
             @Override public void onItemSelected(AdapterView<?> parent, View view, int position, long id) {
                 if (autoRefresh.isChecked()) {
                     CountryRefreshScheduler.configure(activity, true, selectedFrequency());
+                    updateStatus();
                 }
             }
             @Override public void onNothingSelected(AdapterView<?> parent) {}
@@ -139,7 +144,7 @@ public final class CountryPresetPanel {
             updateStatus();
         } catch (Exception e) {
             loaded = null;
-            status.setText("⚠ Country data unavailable: " + e.getMessage());
+            status.setText("⚠ Country data unavailable: " + safeMessage(e));
         }
     }
 
@@ -165,21 +170,31 @@ public final class CountryPresetPanel {
         status.setText("Refreshing country data…");
         ExecutorService executor = Executors.newSingleThreadExecutor();
         executor.execute(() -> {
-            CountryPackStore.RefreshResult result = CountryPackStore.refreshBlocking(activity);
-            activity.runOnUiThread(() -> {
-                refresh.setEnabled(true);
+            try {
+                CountryPackStore.RefreshResult result = CountryPackStore.refreshBlocking(activity);
                 if (result.success) {
                     settings.edit().putString(CountryRefreshScheduler.KEY_LAST_SUCCESS,
                             result.generatedAt).remove(CountryRefreshScheduler.KEY_LAST_ERROR).apply();
-                    loadLocal();
                 } else {
                     settings.edit().putString(CountryRefreshScheduler.KEY_LAST_ERROR,
-                            result.error).apply();
-                    status.setText("⚠ Refresh failed; continuing with last valid/bundled data. "
-                            + result.error);
+                            result.error == null ? "Refresh failed" : result.error).apply();
                 }
-            });
-            executor.shutdown();
+
+                if (!activity.isDestroyed()) {
+                    activity.runOnUiThread(() -> {
+                        if (activity.isDestroyed()) return;
+                        refresh.setEnabled(true);
+                        if (result.success) {
+                            loadLocal();
+                        } else {
+                            status.setText("⚠ Refresh failed; continuing with last valid/bundled data. "
+                                    + (result.error == null ? "Refresh failed" : result.error));
+                        }
+                    });
+                }
+            } finally {
+                executor.shutdown();
+            }
         });
     }
 
@@ -187,8 +202,14 @@ public final class CountryPresetPanel {
         if (loaded == null) return;
         int count = loaded.pack.candidates(selectedCountry(), highOnly.isChecked(),
                 excludeAnonymous.isChecked(), CountryPack.DEFAULT_LIMIT).size();
-        status.setText("Data: " + loaded.pack.generatedAt + " (" + loaded.source + ") · "
-                + count + " candidates after filters");
+        StringBuilder value = new StringBuilder("Data: ")
+                .append(loaded.pack.generatedAt).append(" (").append(loaded.source).append(") · ")
+                .append(count).append(" candidates after filters");
+        String lastError = settings.getString(CountryRefreshScheduler.KEY_LAST_ERROR, "");
+        if (lastError != null && !lastError.isBlank()) {
+            value.append("\n⚠ Last refresh: ").append(lastError);
+        }
+        status.setText(value.toString());
     }
 
     private String selectedCountry() {
@@ -215,6 +236,11 @@ public final class CountryPresetPanel {
             case WEEKLY -> 1;
             case DAILY -> 2;
         };
+    }
+
+    private static String safeMessage(Exception e) {
+        String message = e.getMessage();
+        return message == null || message.isBlank() ? e.getClass().getSimpleName() : message;
     }
 
     private Spinner spinner(String[] values) {
