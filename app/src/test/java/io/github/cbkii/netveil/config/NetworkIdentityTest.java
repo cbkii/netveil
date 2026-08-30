@@ -70,6 +70,27 @@ public class NetworkIdentityTest {
     }
 
     @Test
+    public void multiValueLegacySlashZeroMigratesEntirelyHidden() {
+        List<NetworkIdentity> migrated = NetworkIdentity.migrateLegacy(
+                List.of("202.128.115.2", "1.129.22.61"),
+                List.of("192.168.1.1", "202.128.115.2"), 0);
+        assertEquals(2, migrated.size());
+        assertEquals(NetworkIdentity.RouteMode.HIDDEN, migrated.get(0).routeMode);
+        assertEquals(NetworkIdentity.RouteMode.HIDDEN, migrated.get(1).routeMode);
+        assertNull(migrated.get(0).gateway);
+        assertNull(migrated.get(1).gateway);
+    }
+
+    @Test
+    public void singlePairLegacySlashZeroMayRemainExplicit() {
+        List<NetworkIdentity> migrated = NetworkIdentity.migrateLegacy(
+                List.of("1.129.22.61"), List.of("192.168.1.1"), 0);
+        assertEquals(1, migrated.size());
+        assertEquals(NetworkIdentity.RouteMode.EXPLICIT, migrated.get(0).routeMode);
+        assertEquals("192.168.1.1", migrated.get(0).gateway);
+    }
+
+    @Test
     public void canonicalIdentitySerializationIsStable() {
         NetworkIdentity value = NetworkIdentity.hidden("010.000.000.002");
         assertEquals("H|10.0.0.2", value.serialize());
