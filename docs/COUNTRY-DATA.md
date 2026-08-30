@@ -53,7 +53,23 @@ Fallback order is:
 2. valid previous cache;
 3. bundled APK pack.
 
-A failed download or malformed newer pack never deletes the last valid cache. The bundled pack remains usable offline.
+A failed download, malformed pack, stale/older pack or non-atomic cache replacement never deletes/replaces the last valid data. The bundled pack remains usable offline.
+
+## Pack validation contract
+
+The generated/downloaded data is treated as untrusted structured input. The current schema requires:
+
+- schema version `1`;
+- a parseable UTC `generated_at` timestamp that is not implausibly far in the future;
+- exactly the five MVP country keys `AU`, `US`, `GB`, `ID`, `FR`;
+- a bounded candidate count per country;
+- canonical public/global IPv4 candidates only, excluding private/shared/link-local/documentation/multicast/reserved address families;
+- no duplicate candidate within a country;
+- confidence of `high`, `medium` or `low`;
+- explicit boolean `known_vpn`, `known_proxy`, `known_tor` values;
+- provider name and positive ASN provenance.
+
+The Android cache loader also refuses to replace a newer valid cache with an older downloaded pack. Cache replacement is atomic; if the platform cannot provide atomic replacement, refresh fails safely and keeps the old/bundled data.
 
 ## Generator evidence
 
@@ -67,7 +83,7 @@ Country-allocation corroboration comes from the relevant RIR's standard delegate
 - ARIN: US
 - RIPE NCC: GB, FR
 
-These files describe Internet-number-resource allocation/delegation and are not subscriber lists. NetVeil does not download or redistribute bulk Whois contact data.
+Only active `allocated`/`assigned` IPv4 records are eligible; `available` and other non-active resource states are ignored. These files describe Internet-number-resource allocation/delegation and are not subscriber lists. NetVeil does not download or redistribute bulk Whois contact data.
 
 References:
 
@@ -76,7 +92,7 @@ References:
 
 ### RouteViews
 
-RouteViews is used to obtain current IPv4 prefixes originated by a curated access-provider ASN. The generator uses `/asn/<ASN>?af=4`, respects the unauthenticated API rate limit, and acknowledges RouteViews as the routing-data source.
+RouteViews is used to obtain current IPv4 prefixes originated by a curated access-provider ASN. The generator uses `/asn/<ASN>?af=4`, respects the unauthenticated API rate limit, validates the response shape, and acknowledges RouteViews as the routing-data source.
 
 References:
 
@@ -85,7 +101,7 @@ References:
 
 ### PeeringDB
 
-A narrow anonymous lookup for a curated ASN may be used as **optional corroboration** of an access-network classification (for example `Cable/DSL/ISP`). NetVeil does not copy or redistribute the PeeringDB database. Provider selection does not depend solely on PeeringDB, and an unavailable PeeringDB lookup is non-fatal.
+A narrow anonymous lookup for a curated ASN may be used as **optional corroboration** of an access-network classification (for example `Cable/DSL/ISP`). NetVeil does not copy or redistribute the PeeringDB database. Provider selection does not depend solely on PeeringDB, and an unavailable/rate-limited PeeringDB lookup is non-fatal.
 
 PeeringDB data/API use remains subject to its Acceptable Use Policy. Do not repurpose the generator to bulk-download or redistribute PeeringDB records.
 
@@ -102,20 +118,20 @@ The generator currently uses the following optional exclusion sources where avai
 - X4BNet `lists_vpn`: <https://github.com/X4BNet/lists_vpn> (MIT-licensed repository)
 - `monosans/proxy-list`: <https://github.com/monosans/proxy-list> (MIT-licensed repository)
 
-An unavailable optional exclusion source is reported as a warning and does not destroy the previous valid pack. A generated candidate records the exclusion signals available at generation time. The app's default **Exclude known VPN / proxy / Tor addresses** filter removes candidates carrying any of those signals.
+An unavailable optional exclusion source is reported as a warning and does not destroy the previous valid pack. Generated packs record exclusion-source availability separately from the per-candidate flags so a source outage is auditable rather than silently indistinguishable from a clean result.
 
-The wording is intentionally **known** rather than guaranteed: no public blocklist can prove that an address will never act as a VPN/proxy endpoint later.
+The app's default **Exclude known VPN / proxy / Tor addresses** filter removes candidates carrying any available positive signal. The wording is intentionally **known** rather than guaranteed: no public blocklist can prove that an address will never act as a VPN/proxy endpoint later.
 
 ## Candidate generation rules
 
 For each supported country the generator:
 
-1. loads relevant country IPv4 allocations from its RIR statistics;
+1. loads active country IPv4 allocations/assignments from its RIR statistics;
 2. queries current RouteViews-originated IPv4 prefixes for a small curated set of consumer/access-provider ASNs;
 3. optionally corroborates provider classification through PeeringDB;
 4. rejects non-global/special-use and very small unusable prefixes;
 5. derives a deterministic host address inside qualifying prefixes without contacting that address;
-6. applies available VPN/proxy/Tor exclusion intelligence;
+6. applies available VPN/proxy/Tor exclusion intelligence and records source availability;
 7. round-robins across providers so one provider does not dominate the pack;
 8. emits only a small reserve set (maximum 18 per country; the app normally exposes at most 12 after filters).
 
@@ -165,9 +181,17 @@ When periodic refresh is enabled:
 - Android `JobScheduler` is used rather than adding AndroidX/WorkManager;
 - a network constraint is required;
 - execution is inexact and battery/Doze-aware;
-- failures retain the last valid pack.
+- failures retain the last valid pack and stay on the configured cadence rather than creating an additional retry schedule.
 
-The configured pack URL must be anonymously HTTPS-readable for online refresh. If the repository/data endpoint is private or unavailable, refresh fails safely and NetVeil continues with cached/bundled data.
+The configured pack URL must be anonymously HTTPS-readable for online refresh. If the repository/data endpoint is private or unavailable, refresh fails safely and NetVeil continues with cached/bundled data. This is a deployment condition, not a reason to weaken cache validation or add embedded credentials to the APK.
+
+## Repository automation and permissions
+
+Pull-request country-data validation runs with **read-only repository permission**. It runs deterministic tests plus the live generator and, when live generation succeeds, uploads the generated compact pack as a short-retention workflow artifact for audit.
+
+Only scheduled/manual updater execution receives `contents: write`. That update job consumes the already validated artifact, re-runs pack tests, commits only when bytes changed, and uses a force-with-lease guard so it cannot silently overwrite a branch that moved during execution.
+
+This separation keeps normal PR validation non-mutating while still making the exact live-generated pack inspectable.
 
 ## Maintenance
 
@@ -179,5 +203,5 @@ Before adding a new source or country:
 - add deterministic parser/fixture tests;
 - bound downloads, timeouts and retries;
 - keep optional-source failures non-fatal when a trustworthy existing pack remains;
-- validate the final generated schema and global IPv4 values;
+- validate the final generated schema, provenance and global IPv4 values;
 - update attribution in this document.
