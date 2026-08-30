@@ -34,8 +34,8 @@ public final class CountryPackStore {
         Path cache = context.getFilesDir().toPath().resolve(CACHE_NAME);
         if (!Files.isRegularFile(cache)) return new Loaded(bundled, "bundled");
         try {
-            CountryPack cached = CountryPack.parse(Files.readString(cache, StandardCharsets.UTF_8));
-            return cached.generatedAt.compareTo(bundled.generatedAt) >= 0
+            CountryPack cached = CountryPack.parse(readUtf8(cache));
+            return cached.isAtLeastAsNewAs(bundled)
                     ? new Loaded(cached, "cached") : new Loaded(bundled, "bundled");
         } catch (IOException | JSONException ignored) {
             return new Loaded(bundled, "bundled");
@@ -53,8 +53,10 @@ public final class CountryPackStore {
             try {
                 Files.move(temp, cache, StandardCopyOption.REPLACE_EXISTING,
                         StandardCopyOption.ATOMIC_MOVE);
-            } catch (AtomicMoveNotSupportedException ignored) {
-                Files.move(temp, cache, StandardCopyOption.REPLACE_EXISTING);
+            } catch (AtomicMoveNotSupportedException e) {
+                // Never weaken the cache contract to a non-atomic replacement. The bundled/old
+                // cache remains authoritative and the temporary file is removed by the outer catch.
+                throw new IOException("atomic country-pack cache replacement is unavailable", e);
             }
             return RefreshResult.success(parsed.generatedAt);
         } catch (Exception e) {
@@ -79,6 +81,9 @@ public final class CountryPackStore {
             int status = connection.getResponseCode();
             if (status != HttpURLConnection.HTTP_OK) {
                 throw new IOException("HTTP " + status);
+            }
+            if (!"https".equalsIgnoreCase(connection.getURL().getProtocol())) {
+                throw new IOException("Country pack redirect left HTTPS");
             }
             int declared = connection.getContentLength();
             if (declared > MAX_BYTES) throw new IOException("country pack is too large");
@@ -110,8 +115,14 @@ public final class CountryPackStore {
                 if (total > MAX_BYTES) throw new IOException("bundled country pack is too large");
                 output.write(buffer, 0, read);
             }
-            return output.toString(StandardCharsets.UTF_8);
+            return new String(output.toByteArray(), StandardCharsets.UTF_8);
         }
+    }
+
+    private static String readUtf8(Path path) throws IOException {
+        byte[] bytes = Files.readAllBytes(path);
+        if (bytes.length > MAX_BYTES) throw new IOException("cached country pack is too large");
+        return new String(bytes, StandardCharsets.UTF_8);
     }
 
     public static final class Loaded {
