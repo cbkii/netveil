@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+from datetime import datetime
 import hashlib
 import ipaddress
 import json
@@ -16,7 +17,8 @@ COUNTRIES = ("AU", "US", "GB", "ID", "FR")
 MAX_OUTPUT_PER_COUNTRY = 18
 MIN_OUTPUT_PER_COUNTRY = 8
 MAX_HTTP_BYTES = 24 * 1024 * 1024
-HTTP_TIMEOUT = 20
+HTTP_TIMEOUT = 15
+EXCLUSION_KEYS = ("vpn", "tor", "proxy")
 
 RIR_URLS = {
     "apnic": "https://ftp.apnic.net/apnic/stats/apnic/delegated-apnic-extended-latest",
@@ -174,7 +176,8 @@ def peeringdb_access_signal(payload: dict) -> bool:
 
 
 def route_prefixes(asn: int) -> list[ipaddress.IPv4Network]:
-    payload = json.loads(fetch(ROUTEVIEWS.format(asn=asn), max_bytes=4 * 1024 * 1024))
+    payload = json.loads(fetch(
+        ROUTEVIEWS.format(asn=asn), attempts=2, max_bytes=4 * 1024 * 1024))
     if not isinstance(payload, list):
         raise SourceError(f"unexpected RouteViews response for AS{asn}")
     out: list[ipaddress.IPv4Network] = []
@@ -203,7 +206,7 @@ def exclusion_data() -> tuple[list[ipaddress.IPv4Network], set[ipaddress.IPv4Add
     vpn: list[ipaddress.IPv4Network] = []
     tor: set[ipaddress.IPv4Address] = set()
     proxy: set[ipaddress.IPv4Address] = set()
-    availability = {"vpn": False, "tor": False, "proxy": False}
+    availability = {key: False for key in EXCLUSION_KEYS}
     try:
         vpn = parse_cidrs(fetch(VPN, attempts=2, max_bytes=2 * 1024 * 1024).decode("utf-8", "replace"))
         availability["vpn"] = True
@@ -296,6 +299,11 @@ def validate_pack(pack: dict) -> None:
     generated_at = pack.get("generated_at")
     if not isinstance(generated_at, str) or not generated_at.endswith("Z"):
         raise SourceError("invalid generated_at")
+    try:
+        datetime.fromisoformat(generated_at.replace("Z", "+00:00"))
+    except ValueError as exc:
+        raise SourceError("invalid generated_at") from exc
+
     countries = pack.get("countries") or {}
     if set(countries) != set(COUNTRIES):
         raise SourceError("country set differs from AU/US/GB/ID/FR")
@@ -321,8 +329,15 @@ def validate_pack(pack: dict) -> None:
             for flag in ("known_vpn", "known_proxy", "known_tor"):
                 if not isinstance(row.get(flag), bool):
                     raise SourceError(f"{country} candidate {address} has invalid {flag}")
-            if not isinstance(row.get("provider"), str) or not isinstance(row.get("asn"), int) or row["asn"] <= 0:
+            if (not isinstance(row.get("provider"), str) or not row["provider"].strip()
+                    or not isinstance(row.get("asn"), int) or row["asn"] <= 0):
                 raise SourceError(f"{country} candidate {address} has invalid provider/ASN provenance")
+
+    availability = pack.get("exclusion_sources_available")
+    if availability is not None:
+        if (not isinstance(availability, dict) or set(availability) != set(EXCLUSION_KEYS)
+                or any(not isinstance(availability.get(key), bool) for key in EXCLUSION_KEYS)):
+            raise SourceError("invalid exclusion_sources_available metadata")
 
 
 def generate(output: Path) -> bool:
@@ -339,6 +354,14 @@ def generate(output: Path) -> bool:
             raise SourceError(f"no RIR IPv4 allocations found for {country}")
 
     vpn, tor, proxy, exclusion_availability = exclusion_data()
+    previous_availability = (existing or {}).get("exclusion_sources_available")
+    if (isinstance(previous_availability, dict)
+            and all(previous_availability.get(key) is True for key in EXCLUSION_KEYS)
+            and not all(exclusion_availability.get(key) is True for key in EXCLUSION_KEYS)):
+        log("WARN optional exclusion coverage is temporarily degraded; preserving previous fully-covered pack")
+        validate_pack(existing)
+        return False
+
     countries: dict[str, list[dict]] = {}
     for country in COUNTRIES:
         log(f"[country] {country}")
