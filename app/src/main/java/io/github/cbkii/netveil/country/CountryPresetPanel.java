@@ -25,10 +25,6 @@ public final class CountryPresetPanel {
     private static final String KEY_COUNTRY = "selected_country";
     private static final String KEY_HIGH_ONLY = "high_confidence_only";
     private static final String KEY_EXCLUDE_ANON = "exclude_anonymous";
-    private static final String[] COUNTRY_LABELS = {
-            "Australia", "United States", "United Kingdom", "Indonesia", "France"
-    };
-    private static final String[] COUNTRY_CODES = {"AU", "US", "GB", "ID", "FR"};
     private static final String[] FREQUENCY_LABELS = {"Monthly", "Weekly", "Daily"};
     private static final DateTimeFormatter UTC_TIME = DateTimeFormatter
             .ofPattern("d MMM uuuu HH:mm 'UTC'", Locale.UK)
@@ -69,7 +65,7 @@ public final class CountryPresetPanel {
                         + "gateway and route metadata; NetVeil never probes candidate addresses."));
 
         root.addView(ui.label("Country"));
-        country = ui.spinner(COUNTRY_LABELS);
+        country = ui.spinner(CountryCatalog.labels());
         root.addView(country);
 
         status = ui.status("", UiFactory.Tone.INFO);
@@ -117,8 +113,8 @@ public final class CountryPresetPanel {
                 "Automatic refresh is off by default. When enabled, Monthly is the default; "
                         + "Weekly and Daily remain available."));
 
-        String savedCountry = settings.getString(KEY_COUNTRY, "AU");
-        country.setSelection(countryIndex(savedCountry));
+        String savedCountry = settings.getString(KEY_COUNTRY, CountryCatalog.DEFAULT_CODE);
+        country.setSelection(Math.max(0, CountryCatalog.indexOf(savedCountry)));
 
         add.setOnClickListener(v -> apply(false));
         replace.setOnClickListener(v -> apply(true));
@@ -134,7 +130,7 @@ public final class CountryPresetPanel {
         country.setOnItemSelectedListener(new android.widget.AdapterView.OnItemSelectedListener() {
             @Override public void onItemSelected(android.widget.AdapterView<?> parent, View view,
                     int position, long id) {
-                settings.edit().putString(KEY_COUNTRY, COUNTRY_CODES[position]).apply();
+                settings.edit().putString(KEY_COUNTRY, CountryCatalog.codeAt(position)).apply();
                 updateStatus();
             }
 
@@ -306,8 +302,7 @@ public final class CountryPresetPanel {
     }
 
     private String selectedCountry() {
-        int position = Math.max(0, country.getSelectedItemPosition());
-        return COUNTRY_CODES[Math.min(position, COUNTRY_CODES.length - 1)];
+        return CountryCatalog.codeAt(country.getSelectedItemPosition());
     }
 
     private CountryRefreshScheduler.Frequency selectedFrequency() {
@@ -316,13 +311,6 @@ public final class CountryPresetPanel {
             case 2 -> CountryRefreshScheduler.Frequency.DAILY;
             default -> CountryRefreshScheduler.Frequency.MONTHLY;
         };
-    }
-
-    private static int countryIndex(String code) {
-        for (int i = 0; i < COUNTRY_CODES.length; i++) {
-            if (COUNTRY_CODES[i].equals(code)) return i;
-        }
-        return 0;
     }
 
     private static int frequencyIndex(CountryRefreshScheduler.Frequency frequency) {

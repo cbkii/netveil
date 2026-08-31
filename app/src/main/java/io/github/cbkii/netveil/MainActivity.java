@@ -957,7 +957,7 @@ public final class MainActivity extends Activity {
             hideVpn.setChecked(profile.hideVpn);
             hideProxy.setChecked(profile.hideProxy);
             hideIpv6.setChecked(profile.hideIpv6);
-            currentSeed = exists ? profile.selectionSeed : profile.selectionSeed;
+            currentSeed = profile.selectionSeed;
             if (currentSeed == 0L) currentSeed = nonZeroRandom();
             identityEditors.clear();
             identitiesContainer.removeAllViews();
