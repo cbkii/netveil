@@ -23,22 +23,14 @@ public final class CountryRefreshJobService extends JobService {
             try {
                 CountryPackStore.RefreshResult result = CountryPackStore.refreshBlocking(this);
                 if (stopped) return;
-
-                var editor = CountryRefreshScheduler.preferences(this).edit();
-                if (result.success) {
-                    editor.putString(CountryRefreshScheduler.KEY_LAST_SUCCESS, result.generatedAt)
-                            .remove(CountryRefreshScheduler.KEY_LAST_ERROR);
-                } else {
-                    editor.putString(CountryRefreshScheduler.KEY_LAST_ERROR,
-                            result.error == null ? "Refresh failed" : result.error);
-                }
-                editor.apply();
+                CountryRefreshScheduler.recordRefreshResult(this, result);
 
                 // This is already a periodic job. A transient download failure must not create an
                 // extra retry cadence outside the user's Monthly/Weekly/Daily choice.
                 jobFinished(params, false);
             } finally {
                 localExecutor.shutdown();
+                if (executor == localExecutor) executor = null;
             }
         });
         return true;
