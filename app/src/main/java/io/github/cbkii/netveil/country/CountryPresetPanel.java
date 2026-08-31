@@ -160,7 +160,7 @@ public final class CountryPresetPanel {
         } catch (Exception e) {
             loaded = null;
             ui.setStatus(status, UiFactory.Tone.ERROR,
-                    "Country data unavailable: " + e.getMessage());
+                    "Country data unavailable: " + safeMessage(e));
         }
     }
 
@@ -189,22 +189,47 @@ public final class CountryPresetPanel {
         ui.setStatus(status, UiFactory.Tone.INFO, "Refreshing country data…");
         ExecutorService executor = Executors.newSingleThreadExecutor();
         executor.execute(() -> {
-            CountryPackStore.RefreshResult result = CountryPackStore.refreshBlocking(activity);
-            activity.runOnUiThread(() -> {
-                refresh.setEnabled(true);
+            try {
+                CountryPackStore.RefreshResult result = CountryPackStore.refreshBlocking(activity);
+                String refreshError = result.error == null || result.error.isBlank()
+                        ? "Refresh failed" : result.error;
                 if (result.success) {
                     settings.edit().putString(CountryRefreshScheduler.KEY_LAST_SUCCESS,
                             result.generatedAt).remove(CountryRefreshScheduler.KEY_LAST_ERROR).apply();
-                    loadLocal();
                 } else {
                     settings.edit().putString(CountryRefreshScheduler.KEY_LAST_ERROR,
-                            result.error).apply();
-                    ui.setStatus(status, UiFactory.Tone.WARNING,
-                            "Refresh failed; continuing with the last valid or bundled data. "
-                                    + result.error);
+                            refreshError).apply();
                 }
-            });
-            executor.shutdown();
+
+                if (!activity.isDestroyed()) {
+                    activity.runOnUiThread(() -> {
+                        if (activity.isDestroyed()) return;
+                        refresh.setEnabled(true);
+                        if (result.success) {
+                            loadLocal();
+                        } else {
+                            ui.setStatus(status, UiFactory.Tone.WARNING,
+                                    "Refresh failed; continuing with the last valid or bundled data. "
+                                            + refreshError);
+                        }
+                    });
+                }
+            } catch (Exception e) {
+                String refreshError = safeMessage(e);
+                settings.edit().putString(CountryRefreshScheduler.KEY_LAST_ERROR,
+                        refreshError).apply();
+                if (!activity.isDestroyed()) {
+                    activity.runOnUiThread(() -> {
+                        if (activity.isDestroyed()) return;
+                        refresh.setEnabled(true);
+                        ui.setStatus(status, UiFactory.Tone.WARNING,
+                                "Refresh failed; continuing with the last valid or bundled data. "
+                                        + refreshError);
+                    });
+                }
+            } finally {
+                executor.shutdown();
+            }
         });
     }
 
@@ -212,9 +237,15 @@ public final class CountryPresetPanel {
         if (loaded == null) return;
         int count = loaded.pack.candidates(selectedCountry(), highOnly.isChecked(),
                 excludeAnonymous.isChecked(), CountryPack.DEFAULT_LIMIT).size();
-        ui.setStatus(status, UiFactory.Tone.INFO,
-                count + " candidates after filters · Data " + loaded.pack.generatedAt
-                        + " (" + loaded.source + ")");
+        String value = count + " candidates after filters · Data " + loaded.pack.generatedAt
+                + " (" + loaded.source + ")";
+        String lastError = settings.getString(CountryRefreshScheduler.KEY_LAST_ERROR, "");
+        if (lastError != null && !lastError.isBlank()) {
+            ui.setStatus(status, UiFactory.Tone.WARNING,
+                    value + "\nLast refresh: " + lastError);
+        } else {
+            ui.setStatus(status, UiFactory.Tone.INFO, value);
+        }
     }
 
     private void updateFrequencyVisualState() {
@@ -247,5 +278,10 @@ public final class CountryPresetPanel {
             case WEEKLY -> 1;
             case DAILY -> 2;
         };
+    }
+
+    private static String safeMessage(Exception e) {
+        String message = e.getMessage();
+        return message == null || message.isBlank() ? e.getClass().getSimpleName() : message;
     }
 }
