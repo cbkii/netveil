@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 
+import argparse
 import importlib.util
 import json
 import re
@@ -15,6 +16,10 @@ STORE = ROOT / "app/src/main/java/io/github/cbkii/netveil/country/CountryPackSto
 BUNDLED = ROOT / "app/src/main/assets/country-ip-pack.json"
 GENERATOR_PATH = Path(__file__).with_name("generate_country_pack.py")
 MAX_BYTES = 256 * 1024
+CANONICAL_URL = (
+    "https://raw.githubusercontent.com/cbkii/netveil/main/"
+    "app/src/main/assets/country-ip-pack.json"
+)
 EXPECTED_PERMISSIONS = {
     "android.permission.ACCESS_NETWORK_STATE",
     "android.permission.INTERNET",
@@ -41,8 +46,8 @@ def update_url() -> str:
     if not match:
         fail("unable to resolve CountryPackStore.UPDATE_URL")
     url = match.group(1)
-    if not url.startswith("https://"):
-        fail(f"country refresh endpoint is not HTTPS: {url}")
+    if url != CANONICAL_URL:
+        fail(f"country refresh endpoint is not the canonical same-repo URL: {url}")
     return url
 
 
@@ -63,13 +68,14 @@ def check_manifest_scheduler_contract() -> None:
             fail(f"connectivity-constrained refresh is missing {permission}")
 
 
-def fetch_public_pack(url: str) -> dict:
+def fetch_public_pack(url: str, attempts: int) -> dict:
     last_error: Exception | None = None
-    for attempt in range(1, 4):
+    for attempt in range(1, attempts + 1):
         try:
+            request_url = f"{url}?netveil_contract={time.time_ns()}"
             request = urllib.request.Request(
-                url,
-                headers={"Accept": "application/json", "User-Agent": "NetVeil-CI-country-pack/1"},
+                request_url,
+                headers={"Accept": "application/json", "User-Agent": "NetVeil-CI-country-pack/2"},
             )
             with urllib.request.urlopen(request, timeout=15) as response:
                 if response.status != 200:
@@ -82,27 +88,38 @@ def fetch_public_pack(url: str) -> dict:
                 payload = response.read(MAX_BYTES + 1)
                 if len(payload) > MAX_BYTES:
                     fail("public country pack exceeds the 256 KiB contract")
-            return json.loads(payload.decode("utf-8"))
+            parsed = json.loads(payload.decode("utf-8"))
+            generator.validate_pack(parsed)
+            return parsed
         except Exception as exc:  # bounded retry for transient GitHub/CDN failures
             last_error = exc
-            if attempt < 3:
+            if attempt < attempts:
                 time.sleep(2)
     assert last_error is not None
     raise last_error
 
 
 def main() -> int:
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "--require-remote-match",
+        action="store_true",
+        help="require the public main endpoint to equal the local canonical bundled pack",
+    )
+    args = parser.parse_args()
+
     check_manifest_scheduler_contract()
     url = update_url()
-    remote = fetch_public_pack(url)
-    generator.validate_pack(remote)
 
     bundled = json.loads(BUNDLED.read_text(encoding="utf-8"))
     generator.validate_pack(bundled)
-    if remote != bundled:
-        fail("anonymous public country endpoint does not match the current bundled pack")
 
-    print(f"country refresh contract: OK ({url})")
+    remote = fetch_public_pack(url, 6 if args.require_remote_match else 3)
+    if args.require_remote_match and remote != bundled:
+        fail("anonymous public main endpoint does not match the local canonical bundled pack")
+
+    mode = "strict main equality" if args.require_remote_match else "public endpoint validity"
+    print(f"country refresh contract: OK ({mode}; {url})")
     return 0
 
 
