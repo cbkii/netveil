@@ -12,6 +12,7 @@ on:
       - '.github/workflows/update-country-data.yml'
       - 'app/src/main/AndroidManifest.xml'
       - 'app/src/main/assets/country-ip-pack.json'
+      - 'app/src/main/java/io/github/cbkii/netveil/country/CountryPack.java'
       - 'app/src/main/java/io/github/cbkii/netveil/country/CountryPackStore.java'
       - 'app/src/main/java/io/github/cbkii/netveil/country/CountryRefreshScheduler.java'
 
@@ -38,7 +39,7 @@ jobs:
         with:
           python-version: '3.13'
 
-      - name: Validate generator, fallback pack and public refresh contract
+      - name: Validate generator, canonical pack and public refresh contract
         shell: bash
         run: |
           set -euo pipefail
@@ -55,17 +56,17 @@ jobs:
         shell: bash
         run: |
           set -uo pipefail
-          output='app/src/main/assets/country-ip-pack.json'
+          output='generated-country-ip-pack.json'
           if python3 .github/scripts/generate_country_pack.py --output "$output"; then
             printf 'live_ok=true\n' >> "$GITHUB_OUTPUT"
           else
-            printf '::warning::Live country-data regeneration failed; retaining the last validated bundled pack.\n'
+            printf '::warning::Live country-data regeneration failed; retaining the canonical validated pack.\n'
             printf 'live_ok=false\n' >> "$GITHUB_OUTPUT"
           fi
 
-          # The existing/bundled pack must remain valid even if every live source is unavailable.
+          # The checked-in canonical pack must remain valid even when every live source is unavailable.
           python3 .github/scripts/test_generate_country_pack.py || {
-            printf 'ERROR: no valid country-data pack remains after generation attempt.\n' >&2
+            printf 'ERROR: the canonical country-data pack is invalid.\n' >&2
             exit 1
           }
 
@@ -74,7 +75,7 @@ jobs:
         uses: actions/upload-artifact@v6
         with:
           name: netveil-country-pack-${{ github.run_id }}
-          path: app/src/main/assets/country-ip-pack.json
+          path: generated-country-ip-pack.json
           if-no-files-found: error
           retention-days: 14
 
@@ -88,17 +89,21 @@ jobs:
           {
             printf '## Country data live check\n\n'
             printf -- '- Live regeneration: `%s`\n' "$result"
+            printf -- '- Canonical repository: `cbkii/netveil`\n'
+            printf -- '- Canonical asset: `app/src/main/assets/country-ip-pack.json`\n'
             printf -- '- Countries: `AU US GB ID FR`\n'
-            printf -- '- PR validation uses read-only repository permissions.\n'
-            printf -- '- Anonymous refresh endpoint and permission contract are validated before generation.\n'
-            printf -- '- Existing validated pack remains authoritative when optional/live sources fail.\n'
+            printf -- '- PR and non-main validation are read-only.\n'
+            printf -- '- Existing validated data remains authoritative when optional/live sources fail.\n'
           } >> "$GITHUB_STEP_SUMMARY"
 
   update:
-    if: github.event_name != 'pull_request' && needs.live-check.outputs.live_ok == 'true'
+    if: >-
+      github.event_name != 'pull_request' &&
+      github.ref == 'refs/heads/main' &&
+      needs.live-check.outputs.live_ok == 'true'
     needs: live-check
     runs-on: ubuntu-24.04
-    timeout-minutes: 10
+    timeout-minutes: 12
     permissions:
       contents: write
     steps:
@@ -111,125 +116,148 @@ jobs:
         with:
           python-version: '3.13'
 
-      - name: Download validated live pack
+      - name: Download validated generated pack
         uses: actions/download-artifact@v6
         with:
           name: netveil-country-pack-${{ github.run_id }}
           path: generated-country-pack
 
-      - name: Validate generated pack and pin private branch state
+      - name: Validate generated pack and pin main state
+        id: prepare
         shell: bash
         run: |
           set -euo pipefail
-          generated='generated-country-pack/country-ip-pack.json'
-          output='app/src/main/assets/country-ip-pack.json'
+          generated='generated-country-pack/generated-country-ip-pack.json'
+          canonical='app/src/main/assets/country-ip-pack.json'
           test -s "$generated" || {
             printf 'ERROR: validated generated pack artifact is missing.\n' >&2
             exit 1
           }
-          cp "$generated" "$output"
-          python3 .github/scripts/test_generate_country_pack.py
 
-          branch="$GITHUB_REF_NAME"
-          if [[ "$GITHUB_REF_TYPE" != 'branch' || -z "$branch" ]]; then
-            printf 'ERROR: updater must run from a branch; ref type is %s.\n' "$GITHUB_REF_TYPE" >&2
+          python3 - "$generated" <<'PY'
+          import importlib.util
+          import json
+          import sys
+          from pathlib import Path
+          script = Path('.github/scripts/generate_country_pack.py')
+          spec = importlib.util.spec_from_file_location('country_generator', script)
+          module = importlib.util.module_from_spec(spec)
+          assert spec.loader is not None
+          spec.loader.exec_module(module)
+          module.validate_pack(json.loads(Path(sys.argv[1]).read_text(encoding='utf-8')))
+          PY
+
+          if [[ "$GITHUB_REF" != 'refs/heads/main' || "$GITHUB_REF_NAME" != 'main' ]]; then
+            printf 'ERROR: authoritative country updater may write only main.\n' >&2
             exit 1
           fi
           start_sha="$(git rev-parse HEAD)"
-          git fetch origin "+refs/heads/${branch}:refs/remotes/origin/${branch}"
-          remote_sha="$(git rev-parse "origin/${branch}")"
+          git fetch origin '+refs/heads/main:refs/remotes/origin/main'
+          remote_sha="$(git rev-parse origin/main)"
           if [[ "$start_sha" != "$remote_sha" ]]; then
-            printf 'ERROR: source branch moved before country-data publication: local=%s remote=%s\n' \
+            printf 'ERROR: main moved before country-data update: local=%s remote=%s\n' \
               "$start_sha" "$remote_sha" >&2
             exit 1
           fi
-          printf '%s\n' "$start_sha" > .country-update-start-sha
+          printf 'start_sha=%s\n' "$start_sha" >> "$GITHUB_OUTPUT"
 
-      - name: Publish validated pack to anonymous public mirror
+          changed="$(python3 - "$generated" "$canonical" <<'PY'
+          import json
+          import sys
+          from pathlib import Path
+          def material(path):
+              data = json.loads(Path(path).read_text(encoding='utf-8'))
+              data.pop('generated_at', None)
+              return data
+          print('true' if material(sys.argv[1]) != material(sys.argv[2]) else 'false')
+          PY
+          )"
+          printf 'changed=%s\n' "$changed" >> "$GITHUB_OUTPUT"
+
+      - name: Commit changed canonical pack
+        id: commit
         shell: bash
         env:
-          GH_TOKEN: ${{ secrets.NETVEIL_DATA_TOKEN }}
-          PUBLIC_REPO: cbkii/media
-          PUBLIC_BRANCH: netveil-data
-          PUBLIC_PATH: netveil-data/country-ip-pack.json
+          CHANGED: ${{ steps.prepare.outputs.changed }}
+          START_SHA: ${{ steps.prepare.outputs.start_sha }}
         run: |
           set -euo pipefail
-          if [[ -z "${GH_TOKEN:-}" ]]; then
-            printf 'ERROR: NETVEIL_DATA_TOKEN is required to update the public country-pack mirror.\n' >&2
-            printf 'Configure a fine-grained token with Contents: write for %s.\n' "$PUBLIC_REPO" >&2
-            exit 1
-          fi
+          generated='generated-country-pack/generated-country-ip-pack.json'
+          canonical='app/src/main/assets/country-ip-pack.json'
 
-          generated='generated-country-pack/country-ip-pack.json'
-          api="repos/${PUBLIC_REPO}/contents/${PUBLIC_PATH}"
-          current_json="$(gh api --method GET "$api" -f ref="$PUBLIC_BRANCH")"
-          current_sha="$(jq -r '.sha' <<<"$current_json")"
-          current_file="$(mktemp)"
-          jq -r '.content' <<<"$current_json" | tr -d '\n' | base64 --decode > "$current_file"
-
-          if cmp -s "$generated" "$current_file"; then
-            printf 'Public country pack is unchanged; no mirror commit required.\n'
-          else
-            encoded="$(base64 -w0 "$generated")"
-            gh api --method PUT "$api" \
-              -f message='chore(data): refresh NetVeil country IP candidates' \
-              -f branch="$PUBLIC_BRANCH" \
-              -f sha="$current_sha" \
-              -f content="$encoded" \
-              --jq '.commit.sha' > .country-public-commit-sha
-          fi
-
-          public_url="https://raw.githubusercontent.com/${PUBLIC_REPO}/${PUBLIC_BRANCH}/${PUBLIC_PATH}?run=${GITHUB_RUN_ID}"
-          verified=0
-          for attempt in 1 2 3 4 5 6; do
-            if curl --fail --silent --show-error --location \
-                --connect-timeout 8 --max-time 20 \
-                -H 'Accept: application/json' \
-                -H 'User-Agent: NetVeil-country-pack-publisher/1' \
-                "$public_url" -o public-country-pack.json \
-                && cmp -s "$generated" public-country-pack.json; then
-              verified=1
-              break
-            fi
-            sleep 2
-          done
-          if [[ "$verified" != 1 ]]; then
-            printf 'ERROR: anonymous public mirror did not converge to the validated generated pack.\n' >&2
-            exit 1
-          fi
-
-          # Re-run the same app/release contract after publication, now against the generated pack.
-          cp "$generated" app/src/main/assets/country-ip-pack.json
-          python3 .github/scripts/test_country_refresh_contract.py
-
-      - name: Commit changed bundled pack
-        shell: bash
-        run: |
-          set -euo pipefail
-          output='app/src/main/assets/country-ip-pack.json'
-          start_sha="$(cat .country-update-start-sha)"
-          branch="$GITHUB_REF_NAME"
-
-          if git diff --quiet -- "$output"; then
-            printf 'Bundled country candidate data is unchanged; no private commit required.\n'
+          if [[ "$CHANGED" != 'true' ]]; then
+            printf 'Candidate/provider dataset is unchanged; no canonical commit required.\n'
+            printf 'changed=false\n' >> "$GITHUB_OUTPUT"
+            printf 'commit_sha=%s\n' "$START_SHA" >> "$GITHUB_OUTPUT"
             exit 0
+          fi
+
+          cp "$generated" "$canonical"
+          python3 .github/scripts/test_generate_country_pack.py
+          changed_paths="$(git diff --name-only)"
+          if [[ "$changed_paths" != "$canonical" ]]; then
+            printf 'ERROR: country updater changed unexpected paths:\n%s\n' "$changed_paths" >&2
+            exit 1
           fi
 
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add -- "$output"
+          git add -- "$canonical"
           git commit -m 'chore(data): refresh country IP candidates'
-          git push --force-with-lease="refs/heads/${branch}:${start_sha}" origin "HEAD:${branch}"
+          new_sha="$(git rev-parse HEAD)"
+          git push --force-with-lease="refs/heads/main:${START_SHA}" origin HEAD:main
+          printf 'changed=true\n' >> "$GITHUB_OUTPUT"
+          printf 'commit_sha=%s\n' "$new_sha" >> "$GITHUB_OUTPUT"
+
+      - name: Verify canonical public publication
+        shell: bash
+        env:
+          CHANGED: ${{ steps.commit.outputs.changed }}
+          COMMIT_SHA: ${{ steps.commit.outputs.commit_sha }}
+        run: |
+          set -euo pipefail
+          canonical='app/src/main/assets/country-ip-pack.json'
+          generated='generated-country-pack/generated-country-ip-pack.json'
+          path='app/src/main/assets/country-ip-pack.json'
+
+          if [[ "$CHANGED" == 'true' ]]; then
+            immutable="https://raw.githubusercontent.com/cbkii/netveil/${COMMIT_SHA}/${path}?run=${GITHUB_RUN_ID}"
+            verified=0
+            for attempt in 1 2 3 4; do
+              if curl --fail --silent --show-error --location \
+                  --connect-timeout 8 --max-time 20 \
+                  -H 'Accept: application/json' \
+                  -H 'User-Agent: NetVeil-country-pack-publisher/2' \
+                  "$immutable" -o immutable-country-pack.json \
+                  && cmp -s "$generated" immutable-country-pack.json; then
+                verified=1
+                break
+              fi
+              sleep 2
+            done
+            if [[ "$verified" != 1 ]]; then
+              printf 'ERROR: immutable committed country pack is not anonymously available as expected.\n' >&2
+              exit 1
+            fi
+            cp "$generated" "$canonical"
+          fi
+
+          # The stable URL is what installed applications use. Bounded retries absorb CDN lag.
+          python3 .github/scripts/test_country_refresh_contract.py --require-remote-match
 
       - name: Summary
         if: always()
         shell: bash
+        env:
+          CHANGED: ${{ steps.commit.outputs.changed }}
+          COMMIT_SHA: ${{ steps.commit.outputs.commit_sha }}
         run: |
           {
             printf '## Country data repository update\n\n'
-            printf -- '- Source artifact came from this run\x27s read-only live-check job.\n'
-            printf -- '- Validated bytes are published first to the anonymous public mirror.\n'
-            printf -- '- Public mirror: `cbkii/media` branch `netveil-data`.\n'
-            printf -- '- Cross-repository writes require secret `NETVEIL_DATA_TOKEN`.\n'
-            printf -- '- Private repository write permission remains confined to this scheduled/manual update job.\n'
+            printf -- '- Canonical asset: `app/src/main/assets/country-ip-pack.json`\n'
+            printf -- '- Canonical public endpoint: `https://raw.githubusercontent.com/cbkii/netveil/main/app/src/main/assets/country-ip-pack.json`\n'
+            printf -- '- Material dataset changed: `%s`\n' "${CHANGED:-not-run}"
+            printf -- '- Resulting main SHA: `%s`\n' "${COMMIT_SHA:-not-run}"
+            printf -- '- Writes are confined to `main` and use the job-scoped `GITHUB_TOKEN`.\n'
+            printf -- '- No cross-repository token or mirror is used.\n'
           } >> "$GITHUB_STEP_SUMMARY"
