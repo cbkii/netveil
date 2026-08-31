@@ -2,20 +2,23 @@
   <title id="title">NetVeil app icon</title>
   <desc id="desc">Two network identity bars connected by crossing blue and teal routes.</desc>
 
-  <rect x="21" y="21" width="66" height="18" rx="5" fill="#DDEEFF"/>
-  <rect x="26" y="25" width="10" height="10" fill="#3B82F6"/>
-  <rect x="42" y="25" width="10" height="10" fill="#3B82F6"/>
-  <rect x="58" y="25" width="10" height="10" fill="#3B82F6"/>
-  <rect x="74" y="25" width="10" height="10" fill="#3B82F6"/>
+  <!-- Match the Android adaptive foreground's 78% centre scale and optical padding. -->
+  <g transform="translate(11.88 11.88) scale(0.78)">
+    <rect x="21" y="21" width="66" height="18" rx="5" fill="#DDEEFF"/>
+    <rect x="26" y="25" width="10" height="10" fill="#3B82F6"/>
+    <rect x="42" y="25" width="10" height="10" fill="#3B82F6"/>
+    <rect x="58" y="25" width="10" height="10" fill="#3B82F6"/>
+    <rect x="74" y="25" width="10" height="10" fill="#3B82F6"/>
 
-  <path d="M25.25 45C39 45 43 48 50 54C58 62 63 62 79 62" fill="none" stroke="#14B8A6" stroke-width="8.5" stroke-linecap="round" stroke-linejoin="round"/>
-  <path d="M77 54L87 62L77 68Z" fill="#14B8A6"/>
-  <path d="M25.25 63C39 63 43 60 50 54C58 46 63 46 79 46" fill="none" stroke="#3B82F6" stroke-width="8.5" stroke-linecap="round" stroke-linejoin="round"/>
-  <path d="M77 40L87 46L77 52Z" fill="#3B82F6"/>
+    <path d="M25.25 45C39 45 43 48 50 54C58 62 63 62 79 62" fill="none" stroke="#14B8A6" stroke-width="8.5" stroke-linecap="round" stroke-linejoin="round"/>
+    <path d="M77 54L87 62L77 68Z" fill="#14B8A6"/>
+    <path d="M25.25 63C39 63 43 60 50 54C58 46 63 46 79 46" fill="none" stroke="#3B82F6" stroke-width="8.5" stroke-linecap="round" stroke-linejoin="round"/>
+    <path d="M77 40L87 46L77 52Z" fill="#3B82F6"/>
 
-  <rect x="21" y="69" width="66" height="18" rx="5" fill="#C9FFF2"/>
-  <rect x="26" y="73" width="10" height="10" fill="#0FA99B"/>
-  <rect x="42" y="73" width="10" height="10" fill="#0FA99B"/>
-  <rect x="58" y="73" width="10" height="10" fill="#0FA99B"/>
-  <rect x="74" y="73" width="10" height="10" fill="#0FA99B"/>
+    <rect x="21" y="69" width="66" height="18" rx="5" fill="#C9FFF2"/>
+    <rect x="26" y="73" width="10" height="10" fill="#0FA99B"/>
+    <rect x="42" y="73" width="10" height="10" fill="#0FA99B"/>
+    <rect x="58" y="73" width="10" height="10" fill="#0FA99B"/>
+    <rect x="74" y="73" width="10" height="10" fill="#0FA99B"/>
+  </g>
 </svg>
