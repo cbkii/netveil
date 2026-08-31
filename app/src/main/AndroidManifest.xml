@@ -2,6 +2,8 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
     <!-- Used only for the small public country/provider candidate database. -->
     <uses-permission android:name="android.permission.INTERNET" />
+    <!-- Required when JobScheduler uses a connectivity constraint on targetSdk 34+. -->
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <!-- Required for a persisted JobScheduler job to survive reboot. -->
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
 
