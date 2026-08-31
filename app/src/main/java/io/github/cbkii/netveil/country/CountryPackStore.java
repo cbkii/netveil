@@ -113,8 +113,10 @@ public final class CountryPackStore {
         connection.setConnectTimeout(8_000);
         connection.setReadTimeout(12_000);
         connection.setInstanceFollowRedirects(true);
+        connection.setUseCaches(false);
         connection.setRequestProperty("Accept", "application/json");
-        connection.setRequestProperty("User-Agent", "NetVeil-country-pack/1");
+        connection.setRequestProperty("Cache-Control", "no-cache");
+        connection.setRequestProperty("User-Agent", "NetVeil-country-pack/2");
         try {
             int status = connection.getResponseCode();
             if (status != HttpURLConnection.HTTP_OK) {
