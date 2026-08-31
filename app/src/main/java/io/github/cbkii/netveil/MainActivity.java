@@ -8,24 +8,26 @@ import android.content.pm.ApplicationInfo;
 import android.content.pm.PackageManager;
 import android.content.pm.ResolveInfo;
 import android.graphics.Insets;
+import android.graphics.Rect;
+import android.graphics.drawable.ColorDrawable;
 import android.os.Bundle;
 import android.text.Editable;
 import android.text.InputType;
 import android.text.TextWatcher;
-import android.view.Gravity;
 import android.view.View;
 import android.view.ViewGroup;
 import android.view.WindowInsets;
+import android.view.WindowManager;
 import android.view.inputmethod.EditorInfo;
-import android.widget.AdapterView;
 import android.widget.ArrayAdapter;
 import android.widget.AutoCompleteTextView;
 import android.widget.Button;
-import android.widget.CheckBox;
 import android.widget.EditText;
+import android.widget.ImageView;
 import android.widget.LinearLayout;
+import android.widget.RadioGroup;
 import android.widget.ScrollView;
-import android.widget.Spinner;
+import android.widget.Switch;
 import android.widget.TextView;
 import android.widget.Toast;
 
@@ -34,6 +36,7 @@ import io.github.cbkii.netveil.config.Ipv4;
 import io.github.cbkii.netveil.config.NetworkIdentity;
 import io.github.cbkii.netveil.config.Profile;
 import io.github.cbkii.netveil.country.CountryPresetPanel;
+import io.github.cbkii.netveil.ui.UiFactory;
 
 import java.security.SecureRandom;
 import java.util.ArrayList;
@@ -49,10 +52,10 @@ public final class MainActivity extends Activity {
     private static final String MODULE_PACKAGE = "dev.ip.netveil";
     private static final String GLOBAL_LABEL = "★ All scoped apps (Global)";
     private static final String[] POLICY_LABELS = {
-            "Inherit Global", "Custom override", "Disable NetVeil for this app"
+            "Use Global", "Custom", "Off for this app"
     };
     private static final String[] ROUTE_LABELS = {
-            "Hide gateway/routes", "Explicit virtual network"
+            "Omit gateway & routes", "Explicit virtual network"
     };
 
     private final SecureRandom random = new SecureRandom();
@@ -60,21 +63,23 @@ public final class MainActivity extends Activity {
     private final List<IdentityEditor> identityEditors = new ArrayList<>();
 
     private SharedPreferences prefs;
+    private UiFactory ui;
     private ScrollView scroll;
     private LinearLayout root;
     private AutoCompleteTextView targetField;
     private LinearLayout policyContainer;
-    private Spinner policySpinner;
+    private RadioGroup policyChoices;
     private LinearLayout profileBody;
-    private CheckBox enabled;
-    private CheckBox randomize;
-    private CheckBox hideVpn;
-    private CheckBox hideProxy;
-    private CheckBox hideIpv6;
+    private Switch enabled;
+    private Switch randomize;
+    private Switch hideVpn;
+    private Switch hideProxy;
+    private Switch hideIpv6;
     private LinearLayout identitiesContainer;
     private EditText dns;
     private TextView dnsStatus;
     private TextView validationSummary;
+    private TextView summaryChip;
     private TextView preview;
     private Button reroll;
     private Button delete;
@@ -88,11 +93,15 @@ public final class MainActivity extends Activity {
     public void onCreate(Bundle state) {
         super.onCreate(state);
         prefs = getSharedPreferences(ConfigKeys.PREFS, MODE_PRIVATE);
+        ui = new UiFactory(this);
+        getWindow().setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE);
 
         scroll = new ScrollView(this);
-        root = new LinearLayout(this);
-        root.setOrientation(LinearLayout.VERTICAL);
-        int pad = dp(18);
+        scroll.setFillViewport(true);
+        scroll.setBackgroundColor(ui.color(R.color.nv_background));
+
+        root = ui.vertical();
+        int pad = ui.dp(18);
         root.setPadding(pad, pad, pad, pad);
         scroll.addView(root);
         scroll.setOnApplyWindowInsetsListener((view, insets) -> {
@@ -106,127 +115,26 @@ public final class MainActivity extends Activity {
             return insets;
         });
 
-        root.addView(text("NetVeil", 24));
-        root.addView(text(
-                "API-visible network identity masking for Android 15+. NetVeil does not reroute "
-                        + "traffic or alter the public IP seen by remote servers.", 14));
-        root.addView(helper(
-                "Vector / LSPosed scope is the execution gate. Global applies only to apps already "
-                        + "scoped there; NetVeil does not broaden framework scope itself."));
+        buildHeader();
+        buildSummaryCard();
+        buildProfileCard();
 
-        root.addView(section("Profile"));
-        root.addView(label("Target profile"));
-        targetField = new AutoCompleteTextView(this);
-        targetField.setSingleLine(true);
-        targetField.setThreshold(0);
-        targetField.setImeOptions(EditorInfo.IME_ACTION_DONE);
-        targetField.setHint("Choose Global/app, or type a package name");
-        targetField.setLayoutParams(matchWrap());
-        targetField.setOnClickListener(v -> targetField.showDropDown());
-        targetField.setOnFocusChangeListener((v, focused) -> {
-            if (focused) targetField.showDropDown();
-        });
-        targetField.setOnEditorActionListener((v, actionId, event) -> {
-            if (actionId == EditorInfo.IME_ACTION_DONE) {
-                loadTargetFromField();
-                return true;
-            }
-            return false;
-        });
-        root.addView(targetField);
-        root.addView(helper(
-                "The dropdown includes Global, saved/custom package names, and launchable installed apps. "
-                        + "You can also type an exact package name manually."));
-        Button loadTarget = fullButton("Load selected profile");
-        loadTarget.setOnClickListener(v -> loadTargetFromField());
-        root.addView(loadTarget);
-
-        policyContainer = new LinearLayout(this);
-        policyContainer.setOrientation(LinearLayout.VERTICAL);
-        policyContainer.addView(label("Per-app profile mode"));
-        policySpinner = spinner(POLICY_LABELS);
-        policyContainer.addView(policySpinner);
-        policyContainer.addView(helper(
-                "Inherit uses Global. Custom stores an override. Disabled exempts this app even while "
-                        + "it remains scoped in Vector / LSPosed."));
-        root.addView(policyContainer);
-        policySpinner.setOnItemSelectedListener(new SimpleSelectionListener() {
-            @Override public void onItemSelected(AdapterView<?> parent, View view, int position, long id) {
-                if (!loading) onPolicyChanged();
-            }
-        });
-
-        profileBody = new LinearLayout(this);
-        profileBody.setOrientation(LinearLayout.VERTICAL);
+        profileBody = ui.vertical();
+        profileBody.setLayoutParams(ui.matchWrap());
         root.addView(profileBody);
 
-        enabled = check("Enable this profile", true);
-        profileBody.addView(enabled);
+        buildProfileStatusCard();
+        buildIdentityCard();
+        buildCountryCard();
+        buildDnsCard();
+        buildSelectionCard();
+        buildPrivacyCard();
 
-        profileBody.addView(section("Network identities"));
-        profileBody.addView(helper(
-                "Each entry is a complete identity. The default hides gateway/routes, so arbitrary "
-                        + "IPv4 values do not need a fake subnet or the /0 workaround."));
-        identitiesContainer = new LinearLayout(this);
-        identitiesContainer.setOrientation(LinearLayout.VERTICAL);
-        profileBody.addView(identitiesContainer);
-        Button addIdentity = fullButton("+ Add network identity");
-        addIdentity.setOnClickListener(v -> {
-            addIdentityEditor(null);
-            validateAndPreview();
-        });
-        profileBody.addView(addIdentity);
-
-        profileBody.addView(section("Country IPv4 preset"));
-        CountryPresetPanel countryPresetPanel = new CountryPresetPanel(this, this::applyCountryPreset);
-        profileBody.addView(countryPresetPanel.view());
-
-        profileBody.addView(section("DNS"));
-        profileBody.addView(label("DNS sets"));
-        profileBody.addView(helper(
-                "One set per line; comma-separate servers within a set. Randomisation selects one "
-                        + "whole DNS set, not individual servers."));
-        dns = field(true);
-        dns.setHint("8.8.8.8, 8.8.4.4\n1.1.1.1, 1.0.0.1");
-        profileBody.addView(dns);
-        dnsStatus = helper("");
-        profileBody.addView(dnsStatus);
-
-        profileBody.addView(section("Selection"));
-        randomize = check("Randomise identities and DNS sets", false);
-        profileBody.addView(randomize);
-        profileBody.addView(helper(
-                "Global randomisation is stable per package: different scoped apps can receive "
-                        + "different selections, while every process of one app stays consistent until Reroll."));
-
-        profileBody.addView(section("Privacy"));
-        hideVpn = check("Hide VPN transport/interface indicators", true);
-        hideProxy = check("Hide HTTP/SOCKS proxy indicators", true);
-        hideIpv6 = check("Suppress IPv6 addresses from covered APIs", false);
-        profileBody.addView(hideVpn);
-        profileBody.addView(hideProxy);
-        profileBody.addView(hideIpv6);
-
-        validationSummary = text("", 13);
+        validationSummary = ui.status("", UiFactory.Tone.NEUTRAL);
+        validationSummary.setLayoutParams(ui.blockParams(16));
         profileBody.addView(validationSummary);
 
-        root.addView(section("Resolved preview"));
-        preview = text("", 13);
-        root.addView(preview);
-
-        LinearLayout buttons = new LinearLayout(this);
-        buttons.setOrientation(LinearLayout.HORIZONTAL);
-        Button save = button("Save");
-        reroll = button("Reroll");
-        delete = button("Delete");
-        buttons.addView(save);
-        buttons.addView(reroll);
-        buttons.addView(delete);
-        root.addView(buttons);
-
-        save.setOnClickListener(v -> saveSelected());
-        reroll.setOnClickListener(v -> rerollSelected());
-        delete.setOnClickListener(v -> confirmDeleteSelected());
+        buildActionsCard();
 
         watch(dns);
         enabled.setOnCheckedChangeListener((buttonView, isChecked) -> validateAndPreview());
@@ -241,6 +149,229 @@ public final class MainActivity extends Activity {
         scroll.requestApplyInsets();
     }
 
+    private void buildHeader() {
+        LinearLayout header = ui.row();
+        header.setLayoutParams(ui.blockParams(12));
+
+        ImageView icon = new ImageView(this);
+        icon.setImageResource(R.mipmap.ic_launcher);
+        icon.setScaleType(ImageView.ScaleType.FIT_CENTER);
+        icon.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_NO);
+        LinearLayout.LayoutParams iconParams = new LinearLayout.LayoutParams(ui.dp(64), ui.dp(64));
+        iconParams.rightMargin = ui.dp(14);
+        header.addView(icon, iconParams);
+
+        LinearLayout titles = ui.vertical();
+        titles.addView(ui.appTitle("NetVeil"));
+        titles.addView(ui.helper("App-visible network identity masking"));
+        header.addView(titles, new LinearLayout.LayoutParams(
+                0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+        root.addView(header);
+
+        TextView publicIpNotice = ui.status(
+                "Changes affect app-visible Android network APIs only. NetVeil does not change "
+                        + "your real/public IP.",
+                UiFactory.Tone.INFO);
+        publicIpNotice.setLayoutParams(ui.blockParams(8));
+        root.addView(publicIpNotice);
+
+        TextView scopeNotice = ui.helper(
+                "Vector / LSPosed scope remains the execution gate. Global applies only to apps "
+                        + "already scoped there; NetVeil does not broaden framework scope.");
+        scopeNotice.setLayoutParams(ui.blockParams(12));
+        root.addView(scopeNotice);
+    }
+
+    private void buildSummaryCard() {
+        LinearLayout card = ui.card();
+
+        LinearLayout heading = ui.row();
+        TextView title = ui.sectionTitle("Effective state");
+        heading.addView(title, new LinearLayout.LayoutParams(
+                0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+        summaryChip = ui.chip("GLOBAL", UiFactory.Tone.INFO);
+        heading.addView(summaryChip);
+        card.addView(heading);
+
+        preview = ui.body("");
+        preview.setTextSize(15);
+        preview.setLineSpacing(0, 1.14f);
+        card.addView(preview);
+
+        card.addView(ui.helper(
+                "This summary reflects the loaded draft or resolved profile; changes are applied "
+                        + "to target app processes after Save and restart."));
+        root.addView(card);
+    }
+
+    private void buildProfileCard() {
+        LinearLayout card = ui.card();
+        card.addView(ui.sectionTitle("Target profile"));
+        card.addView(ui.label("Profile"));
+
+        targetField = new AutoCompleteTextView(this);
+        ui.styleInput(targetField, false);
+        targetField.setThreshold(0);
+        targetField.setImeOptions(EditorInfo.IME_ACTION_DONE);
+        targetField.setHint("Choose Global/app, or type a package name");
+        targetField.setDropDownBackgroundDrawable(
+                new ColorDrawable(ui.color(R.color.nv_surface_container_high)));
+        targetField.setOnClickListener(v -> targetField.showDropDown());
+        targetField.setOnFocusChangeListener((v, focused) -> {
+            if (focused) targetField.showDropDown();
+        });
+        targetField.setOnEditorActionListener((v, actionId, event) -> {
+            if (actionId == EditorInfo.IME_ACTION_DONE) {
+                loadTargetFromField();
+                return true;
+            }
+            return false;
+        });
+        card.addView(targetField);
+        card.addView(ui.helper(
+                "Choose Global, a saved or launchable app, or enter an exact package name manually. "
+                        + "Changing typed target text is write-safe: load it first, review, then Save."));
+
+        Button loadTarget = ui.button("Load selected profile", UiFactory.ButtonKind.TONAL);
+        loadTarget.setLayoutParams(ui.matchWrap());
+        loadTarget.setOnClickListener(v -> loadTargetFromField());
+        card.addView(loadTarget);
+
+        policyContainer = ui.vertical();
+        policyContainer.addView(ui.divider());
+        policyContainer.addView(ui.subheading("Per-app mode"));
+        policyContainer.addView(ui.helper(
+                "Use Global applies the Global profile. Custom stores separate settings. Off for "
+                        + "this app installs no NetVeil profile hooks even if Vector / LSPosed still scopes it."));
+
+        policyChoices = ui.choiceGroup(POLICY_LABELS, true);
+        policyContainer.addView(policyChoices);
+        policyChoices.setOnCheckedChangeListener((group, checkedId) -> {
+            if (!loading) onPolicyChanged();
+        });
+        card.addView(policyContainer);
+        root.addView(card);
+    }
+
+    private void buildProfileStatusCard() {
+        LinearLayout card = ui.card();
+        card.addView(ui.sectionTitle("Profile status"));
+        enabled = ui.switchControl("Enable masking for this profile", true);
+        card.addView(enabled);
+        card.addView(ui.helper(
+                "When off, the profile remains editable and may retain incomplete values, but its "
+                        + "masking settings are not active."));
+        profileBody.addView(card);
+    }
+
+    private void buildIdentityCard() {
+        LinearLayout card = ui.card();
+        card.addView(ui.sectionTitle("Network identities"));
+        card.addView(ui.helper(
+                "Each entry is a complete app-visible identity. Omit gateway & routes is the normal "
+                        + "choice for arbitrary IPv4 values and does not require a fake subnet or /0 workaround."));
+
+        identitiesContainer = ui.vertical();
+        identitiesContainer.setLayoutParams(ui.matchWrap());
+        card.addView(identitiesContainer);
+
+        Button addIdentity = ui.button("+ Add network identity", UiFactory.ButtonKind.OUTLINE);
+        addIdentity.setLayoutParams(ui.matchWrap());
+        addIdentity.setOnClickListener(v -> {
+            addIdentityEditor(null);
+            validateAndPreview();
+        });
+        card.addView(addIdentity);
+        profileBody.addView(card);
+    }
+
+    private void buildCountryCard() {
+        LinearLayout card = ui.card();
+        card.addView(ui.sectionTitle("Country IPv4 preset"));
+        CountryPresetPanel countryPresetPanel = new CountryPresetPanel(this, this::applyCountryPreset);
+        card.addView(countryPresetPanel.view());
+        profileBody.addView(card);
+    }
+
+    private void buildDnsCard() {
+        LinearLayout card = ui.card();
+        card.addView(ui.sectionTitle("DNS"));
+        card.addView(ui.label("DNS sets"));
+        card.addView(ui.helper(
+                "One set per line; comma-separate servers within a set. Randomisation selects one "
+                        + "whole DNS set rather than mixing individual servers."));
+
+        dns = ui.input(true);
+        dns.setHint("8.8.8.8, 8.8.4.4\n1.1.1.1, 1.0.0.1");
+        card.addView(dns);
+
+        dnsStatus = ui.status("", UiFactory.Tone.NEUTRAL);
+        LinearLayout.LayoutParams statusParams = ui.blockParams(0);
+        statusParams.topMargin = ui.dp(10);
+        dnsStatus.setLayoutParams(statusParams);
+        card.addView(dnsStatus);
+        profileBody.addView(card);
+    }
+
+    private void buildSelectionCard() {
+        LinearLayout card = ui.card();
+        card.addView(ui.sectionTitle("Selection"));
+        randomize = ui.switchControl("Randomise identities and DNS sets", false);
+        card.addView(randomize);
+        card.addView(ui.helper(
+                "Selection remains stable for each package until Reroll. With Global, different "
+                        + "scoped packages can receive different stable selections."));
+        profileBody.addView(card);
+    }
+
+    private void buildPrivacyCard() {
+        LinearLayout card = ui.card();
+        card.addView(ui.sectionTitle("Privacy indicators"));
+
+        hideVpn = ui.switchControl("Hide VPN indicators from apps", true);
+        card.addView(hideVpn);
+        card.addView(ui.helper("Does not disable or disconnect the real VPN."));
+
+        hideProxy = ui.switchControl("Hide proxy indicators from apps", true);
+        card.addView(hideProxy);
+        card.addView(ui.helper("Does not change the device's real proxy configuration."));
+
+        hideIpv6 = ui.switchControl("Suppress IPv6 addresses", false);
+        card.addView(hideIpv6);
+        card.addView(ui.helper("Removes IPv6 addresses from covered app-visible APIs."));
+        profileBody.addView(card);
+    }
+
+    private void buildActionsCard() {
+        LinearLayout card = ui.card();
+        card.addView(ui.sectionTitle("Apply changes"));
+
+        Button save = ui.button("Save changes", UiFactory.ButtonKind.PRIMARY);
+        save.setLayoutParams(ui.matchWrap());
+        card.addView(save);
+
+        LinearLayout secondary = ui.row();
+        LinearLayout.LayoutParams secondaryParams = ui.blockParams(0);
+        secondaryParams.topMargin = ui.dp(12);
+        secondary.setLayoutParams(secondaryParams);
+
+        reroll = ui.button("Reroll", UiFactory.ButtonKind.OUTLINE);
+        delete = ui.button("Remove override", UiFactory.ButtonKind.ERROR);
+
+        LinearLayout.LayoutParams left = ui.weightedParams(1f);
+        left.rightMargin = ui.dp(6);
+        LinearLayout.LayoutParams right = ui.weightedParams(1f);
+        right.leftMargin = ui.dp(6);
+        secondary.addView(reroll, left);
+        secondary.addView(delete, right);
+        card.addView(secondary);
+
+        save.setOnClickListener(v -> saveSelected());
+        reroll.setOnClickListener(v -> rerollSelected());
+        delete.setOnClickListener(v -> confirmDeleteSelected());
+        root.addView(card);
+    }
+
     private void applyCountryPreset(List<String> ipv4Values, boolean replace) {
         if (ipv4Values == null || ipv4Values.isEmpty()) return;
         if (replace) {
@@ -248,7 +379,9 @@ public final class MainActivity extends Activity {
             identitiesContainer.removeAllViews();
         } else {
             List<IdentityEditor> blanks = new ArrayList<>();
-            for (IdentityEditor editor : identityEditors) if (editor.isBlank()) blanks.add(editor);
+            for (IdentityEditor editor : identityEditors) {
+                if (editor.isBlank()) blanks.add(editor);
+            }
             for (IdentityEditor editor : blanks) {
                 identityEditors.remove(editor);
                 identitiesContainer.removeView(editor.container);
@@ -299,7 +432,8 @@ public final class MainActivity extends Activity {
         }
 
         List<TargetEntry> installedList = new ArrayList<>(installed.values());
-        installedList.sort(Comparator.comparing(entry -> entry.label.toLowerCase(java.util.Locale.ROOT)));
+        installedList.sort(Comparator.comparing(
+                entry -> entry.label.toLowerCase(java.util.Locale.ROOT)));
         targets.clear();
         targets.add(TargetEntry.global());
         targets.addAll(saved.values());
@@ -326,7 +460,8 @@ public final class MainActivity extends Activity {
             selectTarget(raw);
             return;
         }
-        targetField.setError("Choose a listed profile or enter a valid package such as org.example.app");
+        targetField.setError(
+                "Choose a listed profile or enter a valid package such as org.example.app");
         targetField.requestFocus();
     }
 
@@ -340,7 +475,9 @@ public final class MainActivity extends Activity {
     }
 
     private TargetEntry findTarget(String target) {
-        for (TargetEntry entry : targets) if (entry.target.equals(target)) return entry;
+        for (TargetEntry entry : targets) {
+            if (entry.target.equals(target)) return entry;
+        }
         return null;
     }
 
@@ -353,8 +490,9 @@ public final class MainActivity extends Activity {
             loadEditor(ConfigKeys.GLOBAL, Profile.hasStoredProfile(prefs, ConfigKeys.GLOBAL));
         } else {
             Profile.AppPolicy policy = Profile.appPolicy(prefs, selectedTarget);
-            policySpinner.setSelection(policyIndex(policy));
-            profileBody.setVisibility(policy == Profile.AppPolicy.CUSTOM ? View.VISIBLE : View.GONE);
+            ui.setChoice(policyChoices, policyIndex(policy));
+            profileBody.setVisibility(policy == Profile.AppPolicy.CUSTOM
+                    ? View.VISIBLE : View.GONE);
             if (policy == Profile.AppPolicy.CUSTOM) {
                 loadEditor(selectedTarget, Profile.hasStoredProfile(prefs, selectedTarget));
             }
@@ -367,7 +505,8 @@ public final class MainActivity extends Activity {
     private void onPolicyChanged() {
         if (isGlobal()) return;
         Profile.AppPolicy policy = selectedPolicy();
-        profileBody.setVisibility(policy == Profile.AppPolicy.CUSTOM ? View.VISIBLE : View.GONE);
+        profileBody.setVisibility(policy == Profile.AppPolicy.CUSTOM
+                ? View.VISIBLE : View.GONE);
         if (policy == Profile.AppPolicy.CUSTOM && !selectedTarget.equals(editorLoadedFor)) {
             if (Profile.hasStoredProfile(prefs, selectedTarget)) {
                 loadEditor(selectedTarget, true);
@@ -412,8 +551,11 @@ public final class MainActivity extends Activity {
             if (currentSeed == 0L && !exists) currentSeed = random.nextLong();
             identityEditors.clear();
             identitiesContainer.removeAllViews();
-            if (profile.identities.isEmpty()) addIdentityEditor(null);
-            else for (NetworkIdentity identity : profile.identities) addIdentityEditor(identity);
+            if (profile.identities.isEmpty()) {
+                addIdentityEditor(null);
+            } else {
+                for (NetworkIdentity identity : profile.identities) addIdentityEditor(identity);
+            }
             dns.setText(formatDnsSets(profile.dnsSets));
         }
         loading = false;
@@ -430,7 +572,8 @@ public final class MainActivity extends Activity {
                 boolean ok = prefs.edit()
                         .putInt(ConfigKeys.SCHEMA_VERSION, ConfigKeys.CURRENT_SCHEMA_VERSION)
                         .putStringSet(ConfigKeys.INDEX, index)
-                        .putString(ConfigKeys.p(selectedTarget, ConfigKeys.FIELD_POLICY), policy.storedValue)
+                        .putString(ConfigKeys.p(selectedTarget, ConfigKeys.FIELD_POLICY),
+                                policy.storedValue)
                         .commit();
                 if (!ok) {
                     toast("Save failed");
@@ -457,7 +600,8 @@ public final class MainActivity extends Activity {
                 .putLong(ConfigKeys.p(target, ConfigKeys.FIELD_SELECTION_SEED), currentSeed)
                 .putString(ConfigKeys.p(target, ConfigKeys.FIELD_IDENTITIES),
                         NetworkIdentity.serializeList(collected.identities))
-                .putString(ConfigKeys.p(target, ConfigKeys.FIELD_DNS), formatDnsSets(collected.dnsSets));
+                .putString(ConfigKeys.p(target, ConfigKeys.FIELD_DNS),
+                        formatDnsSets(collected.dnsSets));
 
         if (!isGlobal()) {
             Set<String> index = mutableIndex();
@@ -489,16 +633,17 @@ public final class MainActivity extends Activity {
         for (TargetEntry entry : targets) {
             if (raw.equals(entry.toString()) || raw.equals(entry.target)) {
                 selectTarget(entry.target);
-                toast("Target loaded. Review the profile, then press Save again.");
+                toast("Target loaded. Review the profile, then press Save changes again.");
                 return false;
             }
         }
         if (isPackageName(raw)) {
             selectTarget(raw);
-            toast("Target loaded. Review the profile, then press Save again.");
+            toast("Target loaded. Review the profile, then press Save changes again.");
             return false;
         }
-        targetField.setError("Choose a listed profile or enter a valid package such as org.example.app");
+        targetField.setError(
+                "Choose a listed profile or enter a valid package such as org.example.app");
         targetField.requestFocus();
         return false;
     }
@@ -515,20 +660,26 @@ public final class MainActivity extends Activity {
                 identities.add(validation.identity);
             }
         }
+
         DnsValidation dnsValidation = validateDns();
         boolean requiresData = enabled.isChecked();
         if (requiresData && identities.isEmpty() && firstInvalid == null) {
-            validationSummary.setText("⚠ Add at least one valid network identity.");
-            if (focusInvalid && !identityEditors.isEmpty()) identityEditors.get(0).focusIpv4();
+            setValidation(UiFactory.Tone.ERROR,
+                    "Add at least one valid network identity.");
+            if (focusInvalid && !identityEditors.isEmpty()) {
+                identityEditors.get(0).focusIpv4();
+            }
             return null;
         }
         if (firstInvalid != null) {
-            validationSummary.setText("⚠ Fix the highlighted network identity before saving.");
+            setValidation(UiFactory.Tone.ERROR,
+                    "Fix the highlighted network identity before saving.");
             if (focusInvalid) firstInvalid.focusFirstInvalid();
             return null;
         }
-        if (!dnsValidation.valid && (requiresData || !dns.getText().toString().trim().isEmpty())) {
-            validationSummary.setText("⚠ " + dnsValidation.error);
+        if (!dnsValidation.valid
+                && (requiresData || !dns.getText().toString().trim().isEmpty())) {
+            setValidation(UiFactory.Tone.ERROR, dnsValidation.error);
             if (focusInvalid) {
                 dns.requestFocus();
                 scrollTo(dns);
@@ -536,23 +687,35 @@ public final class MainActivity extends Activity {
             return null;
         }
         if (requiresData && dnsValidation.sets.isEmpty()) {
-            validationSummary.setText("⚠ Add at least one valid DNS set.");
+            setValidation(UiFactory.Tone.ERROR,
+                    "Add at least one valid DNS set.");
             if (focusInvalid) {
                 dns.requestFocus();
                 scrollTo(dns);
             }
             return null;
         }
-        validationSummary.setText(requiresData ? "✓ Configuration is coherent." : "Profile is disabled; incomplete values may be saved.");
+
+        if (requiresData) {
+            setValidation(UiFactory.Tone.SUCCESS, "Configuration is coherent.");
+        } else {
+            setValidation(UiFactory.Tone.INFO,
+                    "Profile is disabled; incomplete values may be saved.");
+        }
         return new CollectedProfile(identities, dnsValidation.sets);
     }
 
     private DnsValidation validateDns() {
         String raw = dns.getText().toString().trim();
         if (raw.isEmpty()) {
-            dnsStatus.setText(enabled.isChecked() ? "⚠ Add at least one DNS set." : "DNS is optional while disabled.");
+            ui.setStatus(dnsStatus,
+                    enabled.isChecked() ? UiFactory.Tone.WARNING : UiFactory.Tone.NEUTRAL,
+                    enabled.isChecked()
+                            ? "Add at least one DNS set."
+                            : "DNS is optional while this profile is disabled.");
             return new DnsValidation(true, null, List.of());
         }
+
         int lineNumber = 0;
         for (String line : raw.split("[\\r\\n]+")) {
             lineNumber++;
@@ -560,20 +723,27 @@ public final class MainActivity extends Activity {
             for (String token : line.split(",")) {
                 String value = token.trim();
                 if (value.isEmpty() || !Ipv4.isLiteral(value)) {
-                    String error = "DNS set " + lineNumber + " contains invalid IPv4 value: " + value;
-                    dnsStatus.setText("⚠ " + error);
+                    String error = "DNS set " + lineNumber
+                            + " contains invalid IPv4 value: " + value;
+                    ui.setStatus(dnsStatus, UiFactory.Tone.ERROR, error);
                     return new DnsValidation(false, error, List.of());
                 }
             }
         }
+
         List<List<String>> sets = Profile.parseDnsSets(raw);
-        dnsStatus.setText("✓ Parsed " + sets.size() + " DNS set" + (sets.size() == 1 ? "" : "s") + ".");
+        ui.setStatus(dnsStatus, UiFactory.Tone.SUCCESS,
+                "Parsed " + sets.size() + " DNS set" + (sets.size() == 1 ? "" : "s") + ".");
         return new DnsValidation(true, null, sets);
+    }
+
+    private void setValidation(UiFactory.Tone tone, String text) {
+        ui.setStatus(validationSummary, tone, text);
     }
 
     private void rerollSelected() {
         if (!isGlobal() && selectedPolicy() != Profile.AppPolicy.CUSTOM) {
-            toast("Select Global or a Custom override to reroll.");
+            toast("Select Global or a Custom profile to reroll.");
             return;
         }
         String target = isGlobal() ? ConfigKeys.GLOBAL : selectedTarget;
@@ -582,7 +752,9 @@ public final class MainActivity extends Activity {
             return;
         }
         currentSeed = random.nextLong();
-        if (!prefs.edit().putLong(ConfigKeys.p(target, ConfigKeys.FIELD_SELECTION_SEED), currentSeed).commit()) {
+        if (!prefs.edit()
+                .putLong(ConfigKeys.p(target, ConfigKeys.FIELD_SELECTION_SEED), currentSeed)
+                .commit()) {
             toast("Reroll failed");
             return;
         }
@@ -601,7 +773,8 @@ public final class MainActivity extends Activity {
                 .setTitle(title)
                 .setMessage(message)
                 .setNegativeButton("Cancel", null)
-                .setPositiveButton(isGlobal() ? "Reset" : "Remove", (dialog, which) -> deleteSelected())
+                .setPositiveButton(isGlobal() ? "Reset" : "Remove",
+                        (dialog, which) -> deleteSelected())
                 .show();
     }
 
@@ -621,7 +794,7 @@ public final class MainActivity extends Activity {
         }
         refreshTargets();
         loadSelectedTarget();
-        toast(isGlobal() ? "Global profile reset" : "Override removed; app now inherits Global");
+        toast(isGlobal() ? "Global profile reset" : "Override removed; app now uses Global");
     }
 
     private static void clearProfileFields(SharedPreferences.Editor editor, String target) {
@@ -644,44 +817,69 @@ public final class MainActivity extends Activity {
         if (!isGlobal()) {
             Profile.AppPolicy policy = selectedPolicy();
             if (policy == Profile.AppPolicy.DISABLED) {
-                preview.setText(appNameLine() + "\nMode: Disabled for this app\nVector / LSPosed may still scope the process, but NetVeil installs no profile hooks.");
+                setSummary(UiFactory.Tone.INFO, "OFF FOR THIS APP",
+                        appNameLine()
+                                + "\n\nNetVeil does not apply profile hooks to this app. "
+                                + "Vector / LSPosed may still scope the process.");
                 return;
             }
             if (policy == Profile.AppPolicy.INHERIT_GLOBAL) {
                 Profile.Resolved resolved = Profile.resolveEffective(prefs, selectedTarget);
-                preview.setText(appNameLine() + "\nMode: Inherit Global\n" + resolvedText(resolved)
-                        + "\n\nApplies only while this app is scoped in Vector / LSPosed.");
+                setSummary(resolved == null ? UiFactory.Tone.WARNING : UiFactory.Tone.INFO,
+                        "USE GLOBAL",
+                        appNameLine() + "\n\n" + resolvedText(resolved)
+                                + "\n\nApplies only while this app is scoped in Vector / LSPosed.");
                 return;
             }
         }
 
         CollectedProfile collected = collectProfile(false);
         if (collected == null) {
-            preview.setText((isGlobal() ? "Global profile" : appNameLine())
-                    + "\nFix the highlighted fields to produce a resolvable profile.");
+            setSummary(UiFactory.Tone.WARNING, "NEEDS ATTENTION",
+                    (isGlobal() ? "Global profile" : appNameLine())
+                            + "\n\nFix the highlighted fields to produce a resolvable profile.");
             return;
         }
-        Profile draft = Profile.create(enabled.isChecked(), randomize.isChecked(), hideVpn.isChecked(),
+
+        Profile draft = Profile.create(
+                enabled.isChecked(), randomize.isChecked(), hideVpn.isChecked(),
                 hideProxy.isChecked(), hideIpv6.isChecked(), currentSeed,
                 collected.identities, collected.dnsSets);
+
         if (!enabled.isChecked()) {
-            preview.setText((isGlobal() ? "Global profile" : appNameLine()) + "\nProfile disabled.");
+            setSummary(UiFactory.Tone.NEUTRAL,
+                    isGlobal() ? "GLOBAL · DISABLED" : "CUSTOM · DISABLED",
+                    (isGlobal() ? "Global profile" : appNameLine())
+                            + "\n\nMasking is disabled for this profile.");
             return;
         }
+
         if (isGlobal() && randomize.isChecked()) {
-            preview.setText("Global profile\n"
-                    + collected.identities.size() + " network identit"
-                    + (collected.identities.size() == 1 ? "y" : "ies") + "\n"
-                    + collected.dnsSets.size() + " DNS set" + (collected.dnsSets.size() == 1 ? "" : "s") + "\n"
-                    + "Per-app deterministic randomisation\n"
-                    + privacyText()
-                    + "\n\nEach scoped package derives its own stable selection from the Global seed until Reroll.");
+            setSummary(UiFactory.Tone.SUCCESS, "GLOBAL · ENABLED",
+                    collected.identities.size() + " network identit"
+                            + (collected.identities.size() == 1 ? "y" : "ies")
+                            + "\n"
+                            + collected.dnsSets.size() + " DNS set"
+                            + (collected.dnsSets.size() == 1 ? "" : "s")
+                            + "\nPer-app deterministic selection\n"
+                            + privacyText()
+                            + "\n\nEach scoped package derives its own stable selection from "
+                            + "the Global seed until Reroll.");
             return;
         }
+
         Profile.Resolved resolved = draft.resolve();
-        preview.setText((isGlobal() ? "Global profile" : appNameLine()) + "\n"
-                + resolvedText(resolved) + "\n" + privacyText()
-                + "\n\nApplies only to Vector / LSPosed-scoped processes.");
+        setSummary(UiFactory.Tone.SUCCESS,
+                isGlobal() ? "GLOBAL · ENABLED" : "CUSTOM · ENABLED",
+                (isGlobal() ? "Global profile" : appNameLine())
+                        + "\n\n" + resolvedText(resolved)
+                        + "\n" + privacyText()
+                        + "\n\nApplies only to Vector / LSPosed-scoped processes.");
+    }
+
+    private void setSummary(UiFactory.Tone tone, String chip, String body) {
+        ui.setChip(summaryChip, tone, chip);
+        preview.setText(body);
     }
 
     private String resolvedText(Profile.Resolved resolved) {
@@ -689,14 +887,18 @@ public final class MainActivity extends Activity {
         String route = resolved.hasExplicitRoute()
                 ? "IPv4: " + resolved.ipv4 + "/" + resolved.prefixLength
                         + "\nGateway: " + resolved.gateway
-                : "IPv4: " + resolved.ipv4 + "\nGateway/routes: hidden";
+                        + "\nRoutes: explicit virtual network"
+                : "IPv4: " + resolved.ipv4 + "\nGateway & routes: omitted";
         return route + "\nDNS: " + String.join(", ", resolved.dns);
     }
 
     private String privacyText() {
-        return "VPN indicators: " + (hideVpn.isChecked() ? "hidden" : "preserved")
-                + "\nProxy indicators: " + (hideProxy.isChecked() ? "hidden" : "preserved")
-                + "\nIPv6: " + (hideIpv6.isChecked() ? "suppressed on covered APIs" : "preserved");
+        return "VPN indicators: "
+                + (hideVpn.isChecked() ? "hidden from apps" : "preserved")
+                + "\nProxy indicators: "
+                + (hideProxy.isChecked() ? "hidden from apps" : "preserved")
+                + "\nIPv6 addresses: "
+                + (hideIpv6.isChecked() ? "suppressed on covered APIs" : "preserved");
     }
 
     private String appNameLine() {
@@ -709,17 +911,22 @@ public final class MainActivity extends Activity {
         boolean editable = isGlobal() || selectedPolicy() == Profile.AppPolicy.CUSTOM;
         reroll.setEnabled(editable && Profile.hasStoredProfile(
                 prefs, isGlobal() ? ConfigKeys.GLOBAL : selectedTarget));
+        reroll.setAlpha(reroll.isEnabled() ? 1f : 0.45f);
         reroll.setText(isGlobal() ? "Reroll Global" : "Reroll");
+
         delete.setText(isGlobal() ? "Reset Global" : "Remove override");
         delete.setEnabled(isGlobal()
                 ? Profile.hasStoredProfile(prefs, ConfigKeys.GLOBAL)
                 : Profile.hasStoredProfile(prefs, selectedTarget)
-                        || prefs.contains(ConfigKeys.p(selectedTarget, ConfigKeys.FIELD_POLICY)));
+                        || prefs.contains(ConfigKeys.p(
+                                selectedTarget, ConfigKeys.FIELD_POLICY)));
+        delete.setAlpha(delete.isEnabled() ? 1f : 0.45f);
     }
 
     private void addIdentityEditor(NetworkIdentity identity) {
         IdentityEditor editor = new IdentityEditor(identity);
         identityEditors.add(editor);
+        editor.container.setLayoutParams(ui.blockParams(12));
         identitiesContainer.addView(editor.container);
         refreshIdentityHeadings();
     }
@@ -739,7 +946,7 @@ public final class MainActivity extends Activity {
     }
 
     private Profile.AppPolicy selectedPolicy() {
-        return switch (policySpinner.getSelectedItemPosition()) {
+        return switch (ui.choiceIndex(policyChoices)) {
             case 1 -> Profile.AppPolicy.CUSTOM;
             case 2 -> Profile.AppPolicy.DISABLED;
             default -> Profile.AppPolicy.INHERIT_GLOBAL;
@@ -759,7 +966,8 @@ public final class MainActivity extends Activity {
     }
 
     private Set<String> mutableIndex() {
-        return new LinkedHashSet<>(prefs.getStringSet(ConfigKeys.INDEX, new LinkedHashSet<>()));
+        return new LinkedHashSet<>(
+                prefs.getStringSet(ConfigKeys.INDEX, new LinkedHashSet<>()));
     }
 
     private String appLabel(String pkg) {
@@ -785,8 +993,12 @@ public final class MainActivity extends Activity {
 
     private void watch(EditText field) {
         field.addTextChangedListener(new TextWatcher() {
-            @Override public void beforeTextChanged(CharSequence s, int start, int count, int after) {}
-            @Override public void onTextChanged(CharSequence s, int start, int before, int count) {}
+            @Override public void beforeTextChanged(
+                    CharSequence s, int start, int count, int after) {}
+
+            @Override public void onTextChanged(
+                    CharSequence s, int start, int before, int count) {}
+
             @Override public void afterTextChanged(Editable s) {
                 validateAndPreview();
             }
@@ -794,85 +1006,12 @@ public final class MainActivity extends Activity {
     }
 
     private void scrollTo(View view) {
-        scroll.post(() -> scroll.smoothScrollTo(0, Math.max(0, view.getTop() - dp(24))));
-    }
-
-    private TextView section(String value) {
-        TextView view = text(value, 18);
-        view.setPadding(0, dp(18), 0, dp(6));
-        return view;
-    }
-
-    private TextView label(String value) {
-        TextView view = text(value, 14);
-        view.setPadding(0, dp(8), 0, 0);
-        return view;
-    }
-
-    private TextView helper(String value) {
-        TextView view = text(value, 12);
-        view.setPadding(0, dp(2), 0, dp(6));
-        return view;
-    }
-
-    private EditText field(boolean multiLine) {
-        EditText editText = new EditText(this);
-        if (multiLine) {
-            editText.setMinLines(2);
-            editText.setGravity(Gravity.TOP);
-        } else {
-            editText.setSingleLine(true);
-        }
-        editText.setLayoutParams(matchWrap());
-        return editText;
-    }
-
-    private Spinner spinner(String[] values) {
-        Spinner spinner = new Spinner(this);
-        ArrayAdapter<String> adapter = new ArrayAdapter<>(
-                this, android.R.layout.simple_spinner_item, values);
-        adapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item);
-        spinner.setAdapter(adapter);
-        spinner.setLayoutParams(matchWrap());
-        return spinner;
-    }
-
-    private CheckBox check(String label, boolean checked) {
-        CheckBox checkBox = new CheckBox(this);
-        checkBox.setText(label);
-        checkBox.setChecked(checked);
-        return checkBox;
-    }
-
-    private Button button(String label) {
-        Button button = new Button(this);
-        button.setText(label);
-        button.setLayoutParams(new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
-        return button;
-    }
-
-    private Button fullButton(String label) {
-        Button button = new Button(this);
-        button.setText(label);
-        button.setLayoutParams(matchWrap());
-        return button;
-    }
-
-    private TextView text(String value, float size) {
-        TextView textView = new TextView(this);
-        textView.setText(value);
-        textView.setTextSize(size);
-        textView.setPadding(0, dp(6), 0, dp(6));
-        return textView;
-    }
-
-    private LinearLayout.LayoutParams matchWrap() {
-        return new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
-    }
-
-    private int dp(int value) {
-        return Math.round(value * getResources().getDisplayMetrics().density);
+        scroll.post(() -> {
+            Rect rect = new Rect();
+            view.getDrawingRect(rect);
+            scroll.offsetDescendantRectToMyCoords(view, rect);
+            scroll.smoothScrollTo(0, Math.max(0, rect.top - ui.dp(24)));
+        });
     }
 
     private void toast(String value) {
@@ -880,100 +1019,115 @@ public final class MainActivity extends Activity {
     }
 
     private final class IdentityEditor {
-        final LinearLayout container = new LinearLayout(MainActivity.this);
+        final LinearLayout container = ui.innerCard();
         final TextView heading;
         final EditText ip;
-        final Spinner routeMode;
-        final LinearLayout explicitFields = new LinearLayout(MainActivity.this);
+        final RadioGroup routeMode;
+        final LinearLayout explicitFields = ui.vertical();
         final EditText prefix;
         final EditText gateway;
         final TextView status;
 
         IdentityEditor(NetworkIdentity identity) {
-            container.setOrientation(LinearLayout.VERTICAL);
-            container.setPadding(dp(10), dp(8), dp(10), dp(12));
-            heading = text("Identity", 16);
+            heading = ui.subheading("Identity");
             container.addView(heading);
-            container.addView(label("IPv4 address"));
-            container.addView(helper("The IPv4 value exposed to the target app."));
-            ip = field(false);
+            container.addView(ui.label("IPv4 address"));
+            container.addView(ui.helper("The IPv4 value exposed to the target app."));
+
+            ip = ui.input(false);
             ip.setInputType(InputType.TYPE_CLASS_PHONE);
             ip.setHint("202.128.115.2");
             container.addView(ip);
 
-            container.addView(label("Gateway & route visibility"));
-            routeMode = spinner(ROUTE_LABELS);
-            container.addView(routeMode);
-            container.addView(helper(
-                    "Hide is recommended for arbitrary identities. Explicit mode is for a coherent virtual LAN."));
+            container.addView(ui.label("Gateway & routes"));
+            container.addView(ui.helper(
+                    "Omit: expose the configured IPv4 without synthetic gateway or route details. "
+                            + "Explicit: provide a coherent prefix and gateway for a virtual LAN."));
 
-            explicitFields.setOrientation(LinearLayout.VERTICAL);
-            explicitFields.addView(label("IPv4 prefix length"));
-            explicitFields.addView(helper("0–32. /24 is common; /0 covers the entire IPv4 address space."));
-            prefix = field(false);
+            routeMode = ui.choiceGroup(ROUTE_LABELS, false);
+            container.addView(routeMode);
+
+            explicitFields.setLayoutParams(ui.matchWrap());
+            explicitFields.addView(ui.label("IPv4 prefix length"));
+            explicitFields.addView(ui.helper(
+                    "0–32. /24 is common; /0 covers the entire IPv4 address space."));
+
+            prefix = ui.input(false);
             prefix.setInputType(InputType.TYPE_CLASS_NUMBER);
             prefix.setText("24");
             explicitFields.addView(prefix);
-            explicitFields.addView(label("Gateway"));
-            explicitFields.addView(helper("Must be different from the client IPv4 and inside the configured subnet."));
-            gateway = field(false);
+
+            explicitFields.addView(ui.label("Gateway"));
+            explicitFields.addView(ui.helper(
+                    "Must differ from the client IPv4 and be inside the configured subnet."));
+
+            gateway = ui.input(false);
             gateway.setInputType(InputType.TYPE_CLASS_PHONE);
             gateway.setHint("192.168.1.1");
             explicitFields.addView(gateway);
             container.addView(explicitFields);
 
-            status = helper("");
+            status = ui.status("", UiFactory.Tone.NEUTRAL);
+            LinearLayout.LayoutParams statusParams = ui.blockParams(8);
+            statusParams.topMargin = ui.dp(10);
+            status.setLayoutParams(statusParams);
             container.addView(status);
-            Button remove = fullButton("Remove identity");
+
+            Button remove = ui.button("Remove", UiFactory.ButtonKind.ERROR);
+            remove.setLayoutParams(ui.matchWrap());
             remove.setOnClickListener(v -> removeIdentityEditor(this));
             container.addView(remove);
-
-            routeMode.setOnItemSelectedListener(new SimpleSelectionListener() {
-                @Override public void onItemSelected(AdapterView<?> parent, View view, int position, long id) {
-                    explicitFields.setVisibility(position == 1 ? View.VISIBLE : View.GONE);
-                    if (!loading) validateAndPreview();
-                }
-            });
-            watch(ip);
-            watch(prefix);
-            watch(gateway);
 
             if (identity != null) {
                 ip.setText(identity.ipv4);
                 if (identity.routeMode == NetworkIdentity.RouteMode.EXPLICIT) {
-                    routeMode.setSelection(1);
+                    ui.setChoice(routeMode, 1);
                     prefix.setText(String.valueOf(identity.prefixLength));
                     gateway.setText(identity.gateway);
                 } else {
-                    routeMode.setSelection(0);
+                    ui.setChoice(routeMode, 0);
                 }
             } else {
-                routeMode.setSelection(0);
+                ui.setChoice(routeMode, 0);
             }
-            explicitFields.setVisibility(routeMode.getSelectedItemPosition() == 1 ? View.VISIBLE : View.GONE);
+
+            explicitFields.setVisibility(
+                    ui.choiceIndex(routeMode) == 1 ? View.VISIBLE : View.GONE);
+
+            routeMode.setOnCheckedChangeListener((group, checkedId) -> {
+                explicitFields.setVisibility(
+                        ui.choiceIndex(routeMode) == 1 ? View.VISIBLE : View.GONE);
+                if (!loading) validateAndPreview();
+            });
+
+            watch(ip);
+            watch(prefix);
+            watch(gateway);
             validateNow();
         }
 
         boolean isBlank() {
             return ip.getText().toString().trim().isEmpty()
-                    && (routeMode.getSelectedItemPosition() == 0
+                    && (ui.choiceIndex(routeMode) == 0
                     || gateway.getText().toString().trim().isEmpty());
         }
 
         NetworkIdentity.Validation validateNow() {
-            NetworkIdentity.RouteMode mode = routeMode.getSelectedItemPosition() == 1
+            NetworkIdentity.RouteMode mode = ui.choiceIndex(routeMode) == 1
                     ? NetworkIdentity.RouteMode.EXPLICIT : NetworkIdentity.RouteMode.HIDDEN;
             NetworkIdentity.Validation validation = NetworkIdentity.validate(
                     ip.getText().toString(), mode,
                     prefix.getText().toString(), gateway.getText().toString());
+
             if (isBlank()) {
-                status.setText("Enter an IPv4 address, or remove this identity.");
+                ui.setStatus(status, UiFactory.Tone.NEUTRAL,
+                        "Enter an IPv4 address, or remove this identity.");
             } else if (!validation.valid) {
-                status.setText("⚠ " + validation.error);
+                ui.setStatus(status, UiFactory.Tone.ERROR, validation.error);
             } else if (validation.warning != null) {
-                status.setText("⚠ " + validation.warning);
+                ui.setStatus(status, UiFactory.Tone.WARNING, validation.warning);
             } else {
-                status.setText("✓ Valid identity.");
+                ui.setStatus(status, UiFactory.Tone.SUCCESS, "Valid identity.");
             }
             return validation;
         }
@@ -986,7 +1140,7 @@ public final class MainActivity extends Activity {
         void focusFirstInvalid() {
             if (!Ipv4.isLiteral(ip.getText().toString())) {
                 ip.requestFocus();
-            } else if (routeMode.getSelectedItemPosition() == 1) {
+            } else if (ui.choiceIndex(routeMode) == 1) {
                 int value = -1;
                 try {
                     value = Integer.parseInt(prefix.getText().toString().trim());
@@ -1017,14 +1171,11 @@ public final class MainActivity extends Activity {
             return new TargetEntry(ConfigKeys.GLOBAL, GLOBAL_LABEL, "");
         }
 
-        @Override public String toString() {
+        @Override
+        public String toString() {
             if (ConfigKeys.GLOBAL.equals(target)) return GLOBAL_LABEL;
             return group + " · " + label + " — " + target;
         }
-    }
-
-    private abstract static class SimpleSelectionListener implements AdapterView.OnItemSelectedListener {
-        @Override public void onNothingSelected(AdapterView<?> parent) {}
     }
 
     private static final class DnsValidation {
