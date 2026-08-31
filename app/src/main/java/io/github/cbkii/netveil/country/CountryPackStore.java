@@ -23,8 +23,12 @@ public final class CountryPackStore {
     public static final String ASSET_NAME = "country-ip-pack.json";
     public static final String CACHE_NAME = "country-ip-pack.json";
     public static final int MAX_BYTES = 256 * 1024;
+    /**
+     * Anonymous public mirror of the compact generated pack. The NetVeil source repository may
+     * remain private; the installed APK intentionally carries no GitHub credential.
+     */
     public static final String UPDATE_URL =
-            "https://raw.githubusercontent.com/cbkii/netveil/main/app/src/main/assets/country-ip-pack.json";
+            "https://raw.githubusercontent.com/cbkii/media/netveil-data/netveil-data/country-ip-pack.json";
 
     private CountryPackStore() {}
 
