@@ -167,7 +167,8 @@ public final class UiFactory {
         field.setHintTextColor(color(R.color.nv_text_subtle));
         field.setTextSize(15);
         field.setPadding(dp(SPACE_16), dp(SPACE_12), dp(SPACE_16), dp(SPACE_12));
-        field.setBackground(shape(R.color.nv_surface_container_high, CONTROL_RADIUS, R.color.nv_outline, 1));
+        field.setBackground(shape(
+                R.color.nv_surface_container_high, CONTROL_RADIUS, R.color.nv_outline, 1));
         field.setMinHeight(dp(52));
         field.setLayoutParams(matchWrap());
         if (multiLine) {
@@ -187,7 +188,8 @@ public final class UiFactory {
         spinner.setLayoutParams(matchWrap());
         spinner.setMinimumHeight(dp(52));
         spinner.setPadding(dp(SPACE_8), 0, dp(SPACE_8), 0);
-        spinner.setBackground(shape(R.color.nv_surface_container_high, CONTROL_RADIUS, R.color.nv_outline, 1));
+        // Keep the platform dropdown affordance/ripple instead of replacing its background drawable.
+        spinner.setBackgroundTintList(ColorStateList.valueOf(color(R.color.nv_text_secondary)));
         return spinner;
     }
 
@@ -207,9 +209,14 @@ public final class UiFactory {
                 new int[] {}
         };
         control.setThumbTintList(new ColorStateList(
-                states, new int[] { color(R.color.nv_secondary), color(R.color.nv_text_subtle) }));
+                states, new int[] {
+                        color(R.color.nv_secondary), color(R.color.nv_text_subtle)
+                }));
         control.setTrackTintList(new ColorStateList(
-                states, new int[] { color(R.color.nv_secondary_container), color(R.color.nv_surface_container_high) }));
+                states, new int[] {
+                        color(R.color.nv_secondary_container),
+                        color(R.color.nv_surface_container_high)
+                }));
         return control;
     }
 
@@ -223,8 +230,7 @@ public final class UiFactory {
             option.setId(View.generateViewId());
             option.setText(labels[i]);
             option.setTextSize(14);
-            option.setGravity(Gravity.CENTER);
-            option.setButtonDrawable(null);
+            option.setGravity(Gravity.CENTER_VERTICAL);
             option.setMinHeight(dp(50));
             option.setPadding(dp(SPACE_12), dp(SPACE_8), dp(SPACE_12), dp(SPACE_8));
             option.setTextColor(choiceTextColors());
@@ -314,7 +320,6 @@ public final class UiFactory {
         view.setText(value);
         view.setTextSize(sizeSp);
         view.setTextColor(color(colorId));
-        view.setFontFeatureSettings("kern");
         view.setTypeface(android.graphics.Typeface.create(
                 "sans", bold ? android.graphics.Typeface.BOLD : android.graphics.Typeface.NORMAL));
         return view;
@@ -340,7 +345,8 @@ public final class UiFactory {
         return list;
     }
 
-    private GradientDrawable shape(int fillColorId, int radiusDp, int strokeColorId, int strokeDp) {
+    private GradientDrawable shape(
+            int fillColorId, int radiusDp, int strokeColorId, int strokeDp) {
         GradientDrawable drawable = new GradientDrawable();
         drawable.setColor(color(fillColorId));
         drawable.setCornerRadius(dp(radiusDp));
