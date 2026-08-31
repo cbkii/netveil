@@ -22,23 +22,23 @@ public final class CountryRefreshJobService extends JobService {
         localExecutor.execute(() -> {
             try {
                 CountryPackStore.RefreshResult result = CountryPackStore.refreshBlocking(this);
-                if (stopped) return;
-
-                var editor = CountryRefreshScheduler.preferences(this).edit();
-                if (result.success) {
-                    editor.putString(CountryRefreshScheduler.KEY_LAST_SUCCESS, result.generatedAt)
-                            .remove(CountryRefreshScheduler.KEY_LAST_ERROR);
-                } else {
-                    editor.putString(CountryRefreshScheduler.KEY_LAST_ERROR,
-                            result.error == null ? "Refresh failed" : result.error);
+                if (!stopped) {
+                    try {
+                        CountryRefreshScheduler.recordRefreshResult(this, result);
+                    } catch (RuntimeException ignored) {
+                        // A local metadata persistence failure must not crash the app process or
+                        // disrupt the configured periodic cadence. The validated data/cache state
+                        // remains authoritative and can be reflected on the next successful run.
+                    }
                 }
-                editor.apply();
-
-                // This is already a periodic job. A transient download failure must not create an
-                // extra retry cadence outside the user's Monthly/Weekly/Daily choice.
-                jobFinished(params, false);
             } finally {
+                if (!stopped) {
+                    // This is already a periodic job. A transient download/runtime failure must not
+                    // create an extra retry cadence outside the user's configured frequency.
+                    jobFinished(params, false);
+                }
                 localExecutor.shutdown();
+                if (executor == localExecutor) executor = null;
             }
         });
         return true;

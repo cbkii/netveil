@@ -18,17 +18,33 @@ import java.util.Objects;
 
 import javax.net.ssl.HttpsURLConnection;
 
-/** Bundled -> cached -> refreshed country-data store. Refresh never destroys the last valid pack. */
+/** Bundled -> validated online cache country-data store. Refresh never destroys the last valid pack. */
 public final class CountryPackStore {
     public static final String ASSET_NAME = "country-ip-pack.json";
     public static final String CACHE_NAME = "country-ip-pack.json";
     public static final int MAX_BYTES = 256 * 1024;
-    /**
-     * Anonymous public mirror of the compact generated pack. The NetVeil source repository may
-     * remain private; the installed APK intentionally carries no GitHub credential.
-     */
+    /** Canonical public pack in the same public repository that builds the bundled APK asset. */
     public static final String UPDATE_URL =
-            "https://raw.githubusercontent.com/cbkii/media/netveil-data/netveil-data/country-ip-pack.json";
+            "https://raw.githubusercontent.com/cbkii/netveil/main/app/src/main/assets/country-ip-pack.json";
+
+    private static final Object REFRESH_LOCK = new Object();
+
+    public enum Source {
+        BUNDLED("Bundled with APK"),
+        ONLINE_CACHE("Online cache");
+
+        public final String label;
+
+        Source(String label) {
+            this.label = label;
+        }
+    }
+
+    public enum Outcome {
+        UPDATED,
+        UNCHANGED,
+        FAILED
+    }
 
     private CountryPackStore() {}
 
@@ -36,42 +52,68 @@ public final class CountryPackStore {
         Objects.requireNonNull(context, "context");
         CountryPack bundled = CountryPack.parse(readAsset(context));
         Path cache = context.getFilesDir().toPath().resolve(CACHE_NAME);
-        if (!Files.isRegularFile(cache)) return new Loaded(bundled, "bundled");
+        if (!Files.isRegularFile(cache)) return new Loaded(bundled, Source.BUNDLED);
         try {
             CountryPack cached = CountryPack.parse(readUtf8(cache));
-            return cached.isAtLeastAsNewAs(bundled)
-                    ? new Loaded(cached, "cached") : new Loaded(bundled, "bundled");
+            CountryPack.UpdateDisposition cacheState = CountryPack.classifyUpdate(bundled, cached);
+            return switch (cacheState) {
+                case UPDATED, UNCHANGED -> new Loaded(cached, Source.ONLINE_CACHE);
+                case OLDER, SAME_VERSION_CONFLICT -> new Loaded(bundled, Source.BUNDLED);
+            };
         } catch (IOException | JSONException ignored) {
-            return new Loaded(bundled, "bundled");
+            return new Loaded(bundled, Source.BUNDLED);
         }
     }
 
+    /** Manual and scheduled refreshes share one process-wide fetch/classify/replace transaction. */
     public static RefreshResult refreshBlocking(Context context) {
+        synchronized (REFRESH_LOCK) {
+            return refreshLocked(context);
+        }
+    }
+
+    private static RefreshResult refreshLocked(Context context) {
         Path cache = context.getFilesDir().toPath().resolve(CACHE_NAME);
         Path temp = context.getFilesDir().toPath().resolve(CACHE_NAME + ".tmp");
+        Loaded currentLoaded = null;
+        boolean networkAttempted = false;
         try {
-            CountryPack current = loadBest(context).pack;
+            currentLoaded = loadBest(context);
+            networkAttempted = true;
             byte[] bytes = fetchHttps(UPDATE_URL);
             String text = new String(bytes, StandardCharsets.UTF_8);
-            CountryPack parsed = CountryPack.parse(text);
-            if (!parsed.isAtLeastAsNewAs(current)) {
-                throw new IOException("downloaded country pack is older than the current valid data");
+            CountryPack remote = CountryPack.parse(text);
+            CountryPack.UpdateDisposition disposition =
+                    CountryPack.classifyUpdate(currentLoaded.pack, remote);
+            switch (disposition) {
+                case OLDER -> throw new IOException(
+                        "downloaded country pack is older than the current valid data");
+                case SAME_VERSION_CONFLICT -> throw new IOException(
+                        "downloaded country pack changed without advancing generated_at");
+                case UNCHANGED -> {
+                    Files.deleteIfExists(temp);
+                    return RefreshResult.unchanged(remote.generatedAt, System.currentTimeMillis(),
+                            currentLoaded.source);
+                }
+                case UPDATED -> {
+                    Files.write(temp, bytes);
+                    try {
+                        Files.move(temp, cache, StandardCopyOption.REPLACE_EXISTING,
+                                StandardCopyOption.ATOMIC_MOVE);
+                    } catch (AtomicMoveNotSupportedException e) {
+                        throw new IOException("atomic country-pack cache replacement is unavailable", e);
+                    }
+                    return RefreshResult.updated(remote.generatedAt, System.currentTimeMillis());
+                }
             }
-
-            Files.write(temp, bytes);
-            try {
-                Files.move(temp, cache, StandardCopyOption.REPLACE_EXISTING,
-                        StandardCopyOption.ATOMIC_MOVE);
-            } catch (AtomicMoveNotSupportedException e) {
-                // Never weaken the cache contract to a non-atomic replacement. The bundled/old
-                // cache remains authoritative and the temporary file is removed by the outer catch.
-                throw new IOException("atomic country-pack cache replacement is unavailable", e);
-            }
-            return RefreshResult.success(parsed.generatedAt);
+            throw new IOException("unhandled country-pack update state");
         } catch (Exception e) {
             try { Files.deleteIfExists(temp); } catch (IOException ignored) {}
-            return RefreshResult.failure(e.getClass().getSimpleName() + ": "
-                    + (e.getMessage() == null ? "refresh failed" : e.getMessage()));
+            long checkedAtMillis = networkAttempted ? System.currentTimeMillis() : 0L;
+            return RefreshResult.failure(checkedAtMillis,
+                    currentLoaded == null ? null : currentLoaded.source,
+                    e.getClass().getSimpleName() + ": "
+                            + (e.getMessage() == null ? "refresh failed" : e.getMessage()));
         }
     }
 
@@ -84,8 +126,10 @@ public final class CountryPackStore {
         connection.setConnectTimeout(8_000);
         connection.setReadTimeout(12_000);
         connection.setInstanceFollowRedirects(true);
+        connection.setUseCaches(false);
         connection.setRequestProperty("Accept", "application/json");
-        connection.setRequestProperty("User-Agent", "NetVeil-country-pack/1");
+        connection.setRequestProperty("Cache-Control", "no-cache");
+        connection.setRequestProperty("User-Agent", "NetVeil-country-pack/2");
         try {
             int status = connection.getResponseCode();
             if (status != HttpURLConnection.HTTP_OK) {
@@ -136,27 +180,42 @@ public final class CountryPackStore {
 
     public static final class Loaded {
         public final CountryPack pack;
-        public final String source;
-        Loaded(CountryPack pack, String source) {
+        public final Source source;
+
+        Loaded(CountryPack pack, Source source) {
             this.pack = pack;
             this.source = source;
         }
     }
 
     public static final class RefreshResult {
-        public final boolean success;
+        public final Outcome outcome;
         public final String generatedAt;
+        public final long checkedAtMillis;
+        public final Source activeSource;
         public final String error;
-        private RefreshResult(boolean success, String generatedAt, String error) {
-            this.success = success;
+
+        private RefreshResult(Outcome outcome, String generatedAt, long checkedAtMillis,
+                              Source activeSource, String error) {
+            this.outcome = outcome;
             this.generatedAt = generatedAt;
+            this.checkedAtMillis = checkedAtMillis;
+            this.activeSource = activeSource;
             this.error = error;
         }
-        static RefreshResult success(String generatedAt) {
-            return new RefreshResult(true, generatedAt, null);
+
+        static RefreshResult updated(String generatedAt, long checkedAtMillis) {
+            return new RefreshResult(Outcome.UPDATED, generatedAt, checkedAtMillis,
+                    Source.ONLINE_CACHE, null);
         }
-        static RefreshResult failure(String error) {
-            return new RefreshResult(false, null, error);
+
+        static RefreshResult unchanged(String generatedAt, long checkedAtMillis, Source source) {
+            return new RefreshResult(Outcome.UNCHANGED, generatedAt, checkedAtMillis, source, null);
+        }
+
+        static RefreshResult failure(long checkedAtMillis, Source source, String error) {
+            return new RefreshResult(Outcome.FAILED, null, checkedAtMillis, source,
+                    error == null || error.isBlank() ? "Refresh failed" : error);
         }
     }
 }

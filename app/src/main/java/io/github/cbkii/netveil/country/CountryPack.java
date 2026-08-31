@@ -26,6 +26,14 @@ public final class CountryPack {
     public static final int MAX_COUNTRY_CANDIDATES = 64;
     public static final List<String> REQUIRED_COUNTRIES = List.of("AU", "US", "GB", "ID", "FR");
 
+    /** Relationship of a fetched pack to the currently active valid pack. */
+    public enum UpdateDisposition {
+        UPDATED,
+        UNCHANGED,
+        OLDER,
+        SAME_VERSION_CONFLICT
+    }
+
     public final String generatedAt;
     private final Instant generatedInstant;
     private final Map<String, List<Candidate>> countries;
@@ -115,6 +123,34 @@ public final class CountryPack {
         return other == null || !generatedInstant.isBefore(other.generatedInstant);
     }
 
+    /**
+     * Classifies an already-validated remote pack without weakening the generated_at anti-rollback
+     * boundary. A changed candidate set must advance generated_at; mutating one logical version in
+     * place is ambiguous and therefore rejected.
+     */
+    public static UpdateDisposition classifyUpdate(CountryPack current, CountryPack remote) {
+        if (current == null) return UpdateDisposition.UPDATED;
+        int timestampOrder = remote.generatedInstant.compareTo(current.generatedInstant);
+        if (timestampOrder < 0) return UpdateDisposition.OLDER;
+        if (timestampOrder > 0) return UpdateDisposition.UPDATED;
+        return current.hasSameCandidates(remote)
+                ? UpdateDisposition.UNCHANGED
+                : UpdateDisposition.SAME_VERSION_CONFLICT;
+    }
+
+    public boolean hasSameCandidates(CountryPack other) {
+        if (other == null) return false;
+        for (String code : REQUIRED_COUNTRIES) {
+            List<Candidate> left = countries.get(code);
+            List<Candidate> right = other.countries.get(code);
+            if (left == null || right == null || left.size() != right.size()) return false;
+            for (int i = 0; i < left.size(); i++) {
+                if (!left.get(i).sameAs(right.get(i))) return false;
+            }
+        }
+        return true;
+    }
+
     public List<Candidate> candidates(String countryCode, boolean highOnly,
                                       boolean excludeAnonymous, int limit) {
         List<Candidate> source = countries.get(countryCode);
@@ -187,6 +223,17 @@ public final class CountryPack {
 
         public boolean hasAnonymousSignal() {
             return knownVpn || knownProxy || knownTor;
+        }
+
+        private boolean sameAs(Candidate other) {
+            return other != null
+                    && ipv4.equals(other.ipv4)
+                    && confidence.equals(other.confidence)
+                    && knownVpn == other.knownVpn
+                    && knownProxy == other.knownProxy
+                    && knownTor == other.knownTor
+                    && provider.equals(other.provider)
+                    && asn == other.asn;
         }
     }
 }

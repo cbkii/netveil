@@ -6,12 +6,15 @@ import android.content.ComponentName;
 import android.content.Context;
 import android.content.SharedPreferences;
 
-/** Lightweight JobScheduler-backed country pack refresh settings. */
+/** Lightweight JobScheduler-backed country pack refresh settings and refresh metadata. */
 public final class CountryRefreshScheduler {
     public static final String PREFS = "country_data";
     public static final String KEY_AUTO = "auto_refresh";
     public static final String KEY_FREQUENCY = "refresh_frequency";
-    public static final String KEY_LAST_SUCCESS = "last_refresh_success";
+    public static final String KEY_LAST_CHECK_MILLIS = "last_refresh_check_millis";
+    public static final String KEY_LAST_SUCCESS_MILLIS = "last_refresh_success_millis";
+    public static final String KEY_LAST_OUTCOME = "last_refresh_outcome";
+    public static final String KEY_LAST_DATA_GENERATED_AT = "last_refresh_generated_at";
     public static final String KEY_LAST_ERROR = "last_refresh_error";
     public static final String KEY_SCHEDULE_ERROR = "refresh_schedule_error";
     private static final int JOB_ID = 0x4e5650;
@@ -72,6 +75,50 @@ public final class CountryRefreshScheduler {
 
     public static String scheduleError(Context context) {
         return preferences(context).getString(KEY_SCHEDULE_ERROR, "");
+    }
+
+    public static long lastCheckMillis(Context context) {
+        return preferences(context).getLong(KEY_LAST_CHECK_MILLIS, 0L);
+    }
+
+    public static long lastSuccessMillis(Context context) {
+        return preferences(context).getLong(KEY_LAST_SUCCESS_MILLIS, 0L);
+    }
+
+    public static String lastError(Context context) {
+        return preferences(context).getString(KEY_LAST_ERROR, "");
+    }
+
+    public static CountryPackStore.Outcome lastOutcome(Context context) {
+        String stored = preferences(context).getString(KEY_LAST_OUTCOME, "");
+        if (stored == null || stored.isBlank()) return null;
+        try {
+            return CountryPackStore.Outcome.valueOf(stored);
+        } catch (IllegalArgumentException ignored) {
+            return null;
+        }
+    }
+
+    /** Records one completed online refresh attempt; manual and scheduled refresh share this path. */
+    public static void recordRefreshResult(Context context, CountryPackStore.RefreshResult result) {
+        SharedPreferences.Editor editor = preferences(context).edit()
+                .putString(KEY_LAST_OUTCOME, result.outcome.name());
+        if (result.checkedAtMillis > 0L) {
+            editor.putLong(KEY_LAST_CHECK_MILLIS, result.checkedAtMillis);
+        }
+        if (result.outcome == CountryPackStore.Outcome.FAILED) {
+            editor.putString(KEY_LAST_ERROR,
+                    result.error == null || result.error.isBlank() ? "Refresh failed" : result.error);
+        } else {
+            if (result.checkedAtMillis > 0L) {
+                editor.putLong(KEY_LAST_SUCCESS_MILLIS, result.checkedAtMillis);
+            }
+            if (result.generatedAt != null && !result.generatedAt.isBlank()) {
+                editor.putString(KEY_LAST_DATA_GENERATED_AT, result.generatedAt);
+            }
+            editor.remove(KEY_LAST_ERROR);
+        }
+        editor.apply();
     }
 
     /**

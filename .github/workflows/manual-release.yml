@@ -52,6 +52,10 @@ jobs:
         with:
           gradle-version: '9.5.0'
 
+      - name: Validate standalone repository policy
+        shell: bash
+        run: python3 .github/scripts/test_repository_policy.py
+
       - name: Validate release planner
         shell: bash
         run: python3 .github/scripts/manual_release.py --self-test

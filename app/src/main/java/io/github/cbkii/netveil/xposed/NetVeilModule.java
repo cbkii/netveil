@@ -37,28 +37,31 @@ public final class NetVeilModule extends XposedModule {
             return;
         }
 
-        LegacyNetworkInfoHooks legacyHooks = null;
+        NetworkInfoHooks networkInfoHooks = null;
         try {
             SharedPreferences prefs = getRemotePreferences(ConfigKeys.PREFS);
             Profile.Resolved profile = Profile.resolveEffective(prefs, pkg);
             if (profile == null) {
+                String reason = Profile.hasCurrentSchema(prefs)
+                        ? "no-effective-profile" : "unsupported-profile-schema";
                 log(Log.INFO, TAG, "inactive package=" + pkg + " process=" + processName
-                        + " reason=no-effective-profile");
+                        + " reason=" + reason);
                 return;
             }
 
-            // Install the legacy Parcelable projection first. If the main hook graph fails its
-            // required-hook transaction, roll this smaller transaction back as well so a process
-            // never runs with a half-installed NetVeil identity.
-            legacyHooks = new LegacyNetworkInfoHooks(this, profile);
-            String legacyHealth = legacyHooks.install();
+            // NetworkInfo is a separate hook transaction because its deprecated framework class
+            // still exposes VPN state through getters, strings and Parcel data on Android 15/16.
+            // If the main required-hook transaction fails, roll this transaction back as well.
+            networkInfoHooks = new NetworkInfoHooks(this, profile);
+            String networkInfoHealth = networkInfoHooks.install();
             String health = new NetworkHooks(this, profile).install();
             log(Log.INFO, TAG, "active package=" + pkg + " process=" + processName
-                    + " " + health + " " + legacyHealth);
+                    + " " + health + " " + networkInfoHealth);
         } catch (Throwable t) {
-            if (legacyHooks != null) legacyHooks.uninstall();
+            if (networkInfoHooks != null) networkInfoHooks.uninstall();
             // Never let a later package loaded into this process claim a second identity.
-            log(Log.ERROR, TAG, "initialisation failed package=" + pkg + " process=" + processName, t);
+            log(Log.ERROR, TAG,
+                    "initialisation failed package=" + pkg + " process=" + processName, t);
         }
     }
 }

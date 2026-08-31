@@ -11,8 +11,12 @@ import android.widget.TextView;
 
 import io.github.cbkii.netveil.ui.UiFactory;
 
+import java.time.Instant;
+import java.time.ZoneOffset;
+import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Locale;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
@@ -26,6 +30,9 @@ public final class CountryPresetPanel {
     };
     private static final String[] COUNTRY_CODES = {"AU", "US", "GB", "ID", "FR"};
     private static final String[] FREQUENCY_LABELS = {"Monthly", "Weekly", "Daily"};
+    private static final DateTimeFormatter UTC_TIME = DateTimeFormatter
+            .ofPattern("d MMM uuuu HH:mm 'UTC'", Locale.UK)
+            .withZone(ZoneOffset.UTC);
 
     public interface Listener {
         void onApply(List<String> ipv4Values, boolean replace);
@@ -90,8 +97,8 @@ public final class CountryPresetPanel {
         root.addView(ui.divider());
         root.addView(ui.subheading("Country data"));
         root.addView(ui.helper(
-                "Refresh updates only the cached candidate database. Saved profile values are never "
-                        + "rewritten automatically."));
+                "Refresh checks the latest validated NetVeil candidate dataset online. It does not "
+                        + "generate candidates on this device or rewrite saved profile values."));
 
         refresh = ui.button("Refresh now", UiFactory.ButtonKind.TONAL);
         refresh.setLayoutParams(ui.matchWrap());
@@ -210,48 +217,36 @@ public final class CountryPresetPanel {
 
     private void refreshNow() {
         refresh.setEnabled(false);
-        ui.setStatus(status, UiFactory.Tone.INFO, "Refreshing country data…");
+        ui.setStatus(status, UiFactory.Tone.INFO,
+                "Checking the latest validated country data online…");
+        CountryPackStore.Source fallbackSource = loaded == null ? null : loaded.source;
         ExecutorService executor = Executors.newSingleThreadExecutor();
         executor.execute(() -> {
             try {
-                CountryPackStore.RefreshResult result = CountryPackStore.refreshBlocking(activity);
-                String refreshError = result.error == null || result.error.isBlank()
-                        ? "Refresh failed" : result.error;
-                if (result.success) {
-                    settings.edit().putString(CountryRefreshScheduler.KEY_LAST_SUCCESS,
-                            result.generatedAt).remove(CountryRefreshScheduler.KEY_LAST_ERROR).apply();
-                } else {
-                    settings.edit().putString(CountryRefreshScheduler.KEY_LAST_ERROR,
-                            refreshError).apply();
+                CountryPackStore.RefreshResult result;
+                try {
+                    result = CountryPackStore.refreshBlocking(activity);
+                } catch (Exception e) {
+                    result = CountryPackStore.RefreshResult.failure(
+                            System.currentTimeMillis(), fallbackSource, safeMessage(e));
                 }
-
-                if (!activity.isDestroyed()) {
-                    activity.runOnUiThread(() -> {
-                        if (activity.isDestroyed()) return;
-                        refresh.setEnabled(true);
-                        if (result.success) {
-                            loadLocal();
-                        } else {
-                            ui.setStatus(status, UiFactory.Tone.WARNING,
-                                    "Refresh failed; continuing with the last valid or bundled data. "
-                                            + refreshError);
-                        }
-                    });
-                }
-            } catch (Exception e) {
-                String refreshError = safeMessage(e);
-                settings.edit().putString(CountryRefreshScheduler.KEY_LAST_ERROR,
-                        refreshError).apply();
-                if (!activity.isDestroyed()) {
-                    activity.runOnUiThread(() -> {
-                        if (activity.isDestroyed()) return;
-                        refresh.setEnabled(true);
-                        ui.setStatus(status, UiFactory.Tone.WARNING,
-                                "Refresh failed; continuing with the last valid or bundled data. "
-                                        + refreshError);
-                    });
+                CountryRefreshScheduler.recordRefreshResult(activity, result);
+            } catch (RuntimeException e) {
+                CountryPackStore.RefreshResult failed = CountryPackStore.RefreshResult.failure(
+                        System.currentTimeMillis(), fallbackSource, safeMessage(e));
+                try {
+                    CountryRefreshScheduler.recordRefreshResult(activity, failed);
+                } catch (RuntimeException ignored) {
+                    // UI still recovers below even if local metadata persistence itself failed.
                 }
             } finally {
+                if (!activity.isDestroyed()) {
+                    activity.runOnUiThread(() -> {
+                        if (activity.isDestroyed()) return;
+                        refresh.setEnabled(true);
+                        loadLocal();
+                    });
+                }
                 executor.shutdown();
             }
         });
@@ -261,18 +256,43 @@ public final class CountryPresetPanel {
         if (loaded == null) return;
         int count = loaded.pack.candidates(selectedCountry(), highOnly.isChecked(),
                 excludeAnonymous.isChecked(), CountryPack.DEFAULT_LIMIT).size();
-        String value = count + " candidates after filters · Data " + loaded.pack.generatedAt
-                + " (" + loaded.source + ")";
+        StringBuilder value = new StringBuilder()
+                .append(count).append(" candidates after filters")
+                .append("\nDataset: ").append(formatGeneratedAt(loaded.pack.generatedAt))
+                .append("\nSource: ").append(loaded.source.label);
+
+        long lastCheck = CountryRefreshScheduler.lastCheckMillis(activity);
+        if (lastCheck > 0L) {
+            value.append("\nLast checked online: ").append(formatMillis(lastCheck));
+        } else {
+            value.append("\nNot checked online yet");
+        }
+
         String scheduleError = CountryRefreshScheduler.scheduleError(activity);
-        String lastError = settings.getString(CountryRefreshScheduler.KEY_LAST_ERROR, "");
         if (scheduleError != null && !scheduleError.isBlank()) {
             ui.setStatus(status, UiFactory.Tone.WARNING,
                     value + "\nAutomatic refresh disabled: " + scheduleError);
-        } else if (lastError != null && !lastError.isBlank()) {
-            ui.setStatus(status, UiFactory.Tone.WARNING,
-                    value + "\nLast refresh: " + lastError);
+            return;
+        }
+
+        CountryPackStore.Outcome outcome = CountryRefreshScheduler.lastOutcome(activity);
+        String lastError = CountryRefreshScheduler.lastError(activity);
+        if (outcome == CountryPackStore.Outcome.FAILED) {
+            value.append("\nLast refresh: Refresh failed · ")
+                    .append(loaded.source == CountryPackStore.Source.ONLINE_CACHE
+                            ? "using previous online cache" : "using bundled APK data");
+            if (lastError != null && !lastError.isBlank()) {
+                value.append("\n").append(lastError);
+            }
+            ui.setStatus(status, UiFactory.Tone.WARNING, value.toString());
+        } else if (outcome == CountryPackStore.Outcome.UPDATED) {
+            value.append("\nLast refresh: Updated online");
+            ui.setStatus(status, UiFactory.Tone.SUCCESS, value.toString());
+        } else if (outcome == CountryPackStore.Outcome.UNCHANGED) {
+            value.append("\nLast refresh: Online data already current");
+            ui.setStatus(status, UiFactory.Tone.INFO, value.toString());
         } else {
-            ui.setStatus(status, UiFactory.Tone.INFO, value);
+            ui.setStatus(status, UiFactory.Tone.INFO, value.toString());
         }
     }
 
@@ -306,6 +326,18 @@ public final class CountryPresetPanel {
             case WEEKLY -> 1;
             case DAILY -> 2;
         };
+    }
+
+    private static String formatGeneratedAt(String generatedAt) {
+        try {
+            return UTC_TIME.format(Instant.parse(generatedAt));
+        } catch (RuntimeException ignored) {
+            return generatedAt;
+        }
+    }
+
+    private static String formatMillis(long millis) {
+        return UTC_TIME.format(Instant.ofEpochMilli(millis));
     }
 
     private static String safeMessage(Exception e) {

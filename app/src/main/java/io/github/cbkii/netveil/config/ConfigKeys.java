@@ -5,7 +5,7 @@ public final class ConfigKeys {
     public static final String INDEX = "profile_index";
     public static final String GLOBAL = "__global__";
     public static final String SCHEMA_VERSION = "config_schema_version";
-    public static final int CURRENT_SCHEMA_VERSION = 2;
+    public static final int CURRENT_SCHEMA_VERSION = 3;
 
     public static final String FIELD_ENABLED = "enabled";
     public static final String FIELD_RANDOMIZE = "randomize";
@@ -16,11 +16,6 @@ public final class ConfigKeys {
     public static final String FIELD_IDENTITIES = "identities";
     public static final String FIELD_DNS = "dns";
     public static final String FIELD_POLICY = "policy";
-
-    // Legacy v1.0.x fields retained for migration/rollback compatibility.
-    public static final String LEGACY_PREFIX = "prefix";
-    public static final String LEGACY_IPV4 = "ipv4";
-    public static final String LEGACY_GATEWAYS = "gateways";
 
     private ConfigKeys() {}
 

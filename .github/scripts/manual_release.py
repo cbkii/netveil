@@ -139,6 +139,8 @@ def signing(root):
     return ks, props
 
 def qualify(root, tag, version, code, signer, aapt):
+    if run([sys.executable, ".github/scripts/test_repository_policy.py"], check=False).returncode:
+        stop("repository policy contract failed; no release was published")
     if run([sys.executable, ".github/scripts/test_country_refresh_contract.py"], check=False).returncode:
         stop("country refresh permission/endpoint contract failed; no release was published")
     if run(["gradle", "--no-daemon", "--stacktrace", "--warning-mode=all", ":app:testDebugUnitTest", ":app:lintRelease", ":app:assembleRelease"], check=False).returncode:
@@ -241,12 +243,12 @@ def summary(result, branch, tag, version, code, source, sha, draft, prerelease):
 
 def selftest():
     cases = [
-        (("0.2.1","1.0.0",False,False,"x",False),("1.0.0","workflow-dispatch")),
-        (("0.2.2","",True,True,"x",False),("0.2.2","resume-draft")),
-        (("0.2.2","",True,False,"x",True),("0.2.3","auto-patch")),
-        (("0.2.2","",False,False,"chore(release): prepare v0.2.2",False),("0.2.2","resume-prepared-source")),
-        (("0.2.2","",False,False,"x",True),("0.2.2","resume-orphan-tag")),
-        (("0.2.2","",False,False,"x",False),("0.2.3","auto-patch")),
+        (("1.1.1","1.2.0",False,False,"x",False),("1.2.0","workflow-dispatch")),
+        (("1.1.2","",True,True,"x",False),("1.1.2","resume-draft")),
+        (("1.1.2","",True,False,"x",True),("1.1.3","auto-patch")),
+        (("1.1.2","",False,False,"chore(release): prepare v1.1.2",False),("1.1.2","resume-prepared-source")),
+        (("1.1.2","",False,False,"x",True),("1.1.2","resume-orphan-tag")),
+        (("1.1.2","",False,False,"x",False),("1.1.3","auto-patch")),
     ]
     for args,want in cases:
         got = choose_version(*args)

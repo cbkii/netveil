@@ -44,6 +44,7 @@ jobs:
             app/src/main/assets/country-ip-pack.json \
             app/lint.xml \
             .github/scripts/manual_release.py \
+            .github/scripts/test_repository_policy.py \
             .github/scripts/generate_country_pack.py \
             .github/scripts/test_generate_country_pack.py \
             .github/scripts/test_country_refresh_contract.py; do
@@ -53,7 +54,7 @@ jobs:
             fi
           done
           if grep -R 'de.robv.android.xposed' -n app/src/main; then
-            printf 'ERROR: legacy Xposed API reference found.\n' >&2
+            printf 'ERROR: unsupported Xposed API reference found.\n' >&2
             failed=$((failed + 1))
           fi
           if ! grep -F 'applicationId = "dev.ip.netveil"' app/build.gradle.kts >/dev/null; then
@@ -66,10 +67,15 @@ jobs:
           fi
           if ! python3 -m py_compile \
             .github/scripts/manual_release.py \
+            .github/scripts/test_repository_policy.py \
             .github/scripts/generate_country_pack.py \
             .github/scripts/test_generate_country_pack.py \
             .github/scripts/test_country_refresh_contract.py; then
-            printf 'ERROR: a release/country-data Python driver has invalid syntax.\n' >&2
+            printf 'ERROR: a repository/release/country-data Python driver has invalid syntax.\n' >&2
+            failed=$((failed + 1))
+          fi
+          if ! python3 .github/scripts/test_repository_policy.py; then
+            printf 'ERROR: standalone/current-only repository policy failed.\n' >&2
             failed=$((failed + 1))
           fi
           if ! python3 .github/scripts/manual_release.py --self-test; then
@@ -84,7 +90,11 @@ jobs:
             printf 'ERROR: deterministic country generator/bundled-pack tests failed.\n' >&2
             failed=$((failed + 1))
           fi
-          if ! python3 .github/scripts/test_country_refresh_contract.py; then
+          contract_args=()
+          if [[ "${GITHUB_EVENT_NAME:-}" == "push" && "${GITHUB_REF:-}" == "refs/heads/main" ]]; then
+            contract_args+=(--require-remote-match)
+          fi
+          if ! python3 .github/scripts/test_country_refresh_contract.py "${contract_args[@]}"; then
             printf 'ERROR: country refresh permission/endpoint contract failed.\n' >&2
             failed=$((failed + 1))
           fi
@@ -154,6 +164,17 @@ jobs:
               exit 1
             }
           done
+
+          module_prop="$(unzip -p "$release_apk" META-INF/xposed/module.prop)"
+          expected_module_prop="$(printf '%s\n' \
+            'minApiVersion=102' \
+            'targetApiVersion=102' \
+            'staticScope=false')"
+          if [[ "$module_prop" != "$expected_module_prop" ]]; then
+            printf 'ERROR: packaged Xposed API metadata differs from API-102 contract.\nExpected:\n%s\nActual:\n%s\n' \
+              "$expected_module_prop" "$module_prop" >&2
+            exit 1
+          fi
 
           permissions="$("$build_tools/aapt" dump permissions "$release_apk" \
             | sed -n "s/^uses-permission: name='\([^']*\)'.*/\1/p" | sort -u)"

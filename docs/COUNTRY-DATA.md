@@ -25,9 +25,17 @@ There is no per-ISP/ASN management UI. Provider and routing detail remain genera
 
 Imported values are stored as ordinary route-hidden `NetworkIdentity` values. NetVeil never invents an ISP gateway from BGP/RIR data and never changes actual routing or public egress.
 
-Automatic refresh updates only the cached country database. It never rewrites an existing saved profile. The user remains authoritative over profile changes through **Add** and **Replace**.
+Refreshing updates only the country candidate database. It never rewrites an existing saved profile. The user remains authoritative over profile changes through **Add to list** and **Replace list**.
 
-## Data flow
+## Canonical data flow
+
+`cbkii/netveil` is public. There is one canonical generated pack:
+
+`app/src/main/assets/country-ip-pack.json`
+
+The same file is both bundled into the APK and anonymously served from `main`:
+
+`https://raw.githubusercontent.com/cbkii/netveil/main/app/src/main/assets/country-ip-pack.json`
 
 ```text
 public routing/allocation/provider sources
@@ -37,29 +45,58 @@ public routing/allocation/provider sources
               v
 .github/scripts/generate_country_pack.py
               |
-              +--------------------------+
-              |                          |
-              v                          v
-app/src/main/assets/             anonymous public mirror
-country-ip-pack.json             cbkii/media:netveil-data
-              |                          |
-       bundled APK fallback              |
-              |                          |
-              +---- HTTPS refresh <------+
-                         |
-                         v
-                app-private validated cache
+              v
+strict validation
+              |
+              v
+cbkii/netveil/main/app/src/main/assets/country-ip-pack.json
+              |                         |
+              |                         +---- anonymous HTTPS refresh
+              |                                      |
+              v                                      v
+       bundled APK fallback                 app-private validated cache
 ```
 
-The Android app does not scrape RIR, BGP, PeeringDB, Tor or blocklist services itself. It downloads only the compact generated NetVeil pack. The source repository can remain private because the installed app reads the compact mirror anonymously and embeds no GitHub credential.
+There is no second mirror repository, no GitHub Pages data copy, no application token, and no cross-repository publication credential.
+
+The Android app does not scrape RIR, BGP, PeeringDB, Tor or blocklist services itself. **Refresh now** means "check the latest validated NetVeil candidate dataset online". It does not generate candidate addresses on the phone.
+
+## Bundled data, online cache and refresh outcomes
+
+The dataset's `generated_at` value is the time the canonical dataset was generated. It is not the time a phone checked for updates.
+
+NetVeil tracks device-local online-check metadata separately. The UI distinguishes:
+
+- **Bundled with APK** — the currently active pack came from the APK;
+- **Online cache** — the currently active pack came from a previously validated online update;
+- **Updated online** — an online check succeeded and a newer generated pack was atomically installed;
+- **Online data already current** — an online check succeeded and the active pack already represents that generated version;
+- **Refresh failed · using previous online cache** — the online request/validation failed but a valid online cache remains active;
+- **Refresh failed · using bundled APK data** — the online request/validation failed and the bundled pack remains active.
+
+A successful unchanged check records a new **Last checked online** timestamp even though it does not rewrite the cache. Loading an existing cache at app startup does not imply or report a new network request.
+
+## Update and anti-rollback policy
+
+Downloaded packs are parsed and validated before any cache mutation.
+
+Given the currently active valid pack and a validated remote pack:
+
+- a newer `generated_at` is **UPDATED**;
+- the same `generated_at` with the same candidate data is **UNCHANGED**;
+- an older `generated_at` is rejected;
+- the same `generated_at` with changed candidate data is rejected as an ambiguous same-version mutation.
+
+Materially changed canonical data therefore must advance `generated_at`.
+
+Cache replacement is atomic. If the platform cannot provide atomic replacement, refresh fails safely and keeps the previous valid cache or bundled pack.
 
 Fallback order is:
 
-1. valid refreshed cache;
-2. valid previous cache;
-3. bundled APK pack.
+1. valid online cache at least as new as the bundled pack;
+2. bundled APK pack.
 
-A failed download, malformed pack, stale/older pack or non-atomic cache replacement never deletes/replaces the last valid data. The bundled pack remains usable offline.
+A failed download, malformed pack, older pack, same-version conflict or non-atomic cache replacement never destroys the last valid data.
 
 ## Pack validation contract
 
@@ -67,15 +104,13 @@ The generated/downloaded data is treated as untrusted structured input. The curr
 
 - schema version `1`;
 - a parseable UTC `generated_at` timestamp that is not implausibly far in the future;
-- exactly the five MVP country keys `AU`, `US`, `GB`, `ID`, `FR`;
+- exactly the five country keys `AU`, `US`, `GB`, `ID`, `FR`;
 - a bounded candidate count per country;
 - canonical public/global IPv4 candidates only, excluding private/shared/link-local/documentation/multicast/reserved address families;
 - no duplicate candidate within a country;
 - confidence of `high`, `medium` or `low`;
 - explicit boolean `known_vpn`, `known_proxy`, `known_tor` values;
 - provider name and positive ASN provenance.
-
-The Android cache loader also refuses to replace a newer valid cache with an older downloaded pack. Cache replacement is atomic; if the platform cannot provide atomic replacement, refresh fails safely and keeps the old/bundled data.
 
 ## Generator evidence
 
@@ -124,7 +159,7 @@ The generator currently uses the following optional exclusion sources where avai
 - X4BNet `lists_vpn`: <https://github.com/X4BNet/lists_vpn> (MIT-licensed repository)
 - `monosans/proxy-list`: <https://github.com/monosans/proxy-list> (MIT-licensed repository)
 
-An unavailable optional exclusion source is reported as a warning and does not destroy the previous valid pack. Generated packs record exclusion-source availability separately from the per-candidate flags so a source outage is auditable rather than silently indistinguishable from a clean result.
+An unavailable optional exclusion source is reported as a warning and does not destroy the canonical valid pack. Generated packs record exclusion-source availability separately from per-candidate flags so a source outage is auditable rather than silently indistinguishable from a clean result.
 
 The app's default **Exclude known VPN / proxy / Tor addresses** filter removes candidates carrying any available positive signal. The wording is intentionally **known** rather than guaranteed: no public blocklist can prove that an address will never act as a VPN/proxy endpoint later.
 
@@ -163,7 +198,7 @@ The normal UI defaults to high-confidence providers only.
 
 NetVeil requests three normal Android permissions for this feature:
 
-- `INTERNET` — fetches the small public country pack over HTTPS;
+- `INTERNET` — fetches the small canonical country pack over HTTPS;
 - `ACCESS_NETWORK_STATE` — required by modern Android when a `JobScheduler` job declares a connectivity constraint;
 - `RECEIVE_BOOT_COMPLETED` — required for a `JobScheduler` job persisted across reboot.
 
@@ -180,36 +215,43 @@ NetVeil does **not** send:
 
 The Xposed module's target-process networking behaviour is unchanged by these permissions; country presets only populate the same canonical profile model used by manual values.
 
-## Refresh and failure policy
+## Manual and automatic refresh
 
-Repository automation performs a bounded live regeneration daily. Installed apps refresh only when the user presses **Refresh now** or explicitly enables periodic refresh.
+Installed apps refresh only when the user presses **Refresh now** or explicitly enables periodic refresh.
 
 When periodic refresh is enabled:
 
 - monthly is the default;
 - weekly and daily are optional;
-- Android `JobScheduler` is used rather than adding AndroidX/WorkManager;
+- Android `JobScheduler` is used rather than AndroidX/WorkManager;
 - a network constraint is required;
 - scheduling is transactional: a rejected job does not leave automatic refresh recorded as enabled;
 - startup restoration failures are contained and disable automatic refresh rather than crashing the Activity;
 - execution is inexact and battery/Doze-aware;
+- manual and scheduled refresh record the same `UPDATED` / `UNCHANGED` / `FAILED` outcome metadata;
 - failures retain the last valid pack and stay on the configured cadence rather than creating an additional retry schedule.
-
-The installed app currently reads:
-
-`https://raw.githubusercontent.com/cbkii/media/netveil-data/netveil-data/country-ip-pack.json`
-
-CI validates that this endpoint is anonymously HTTPS-readable, stays below the app's 256 KiB download limit, passes the same country-pack validator, and matches the bundled pack used by the APK.
 
 ## Repository automation and permissions
 
-Pull-request country-data validation runs with **read-only repository permission**. It runs deterministic tests, the anonymous endpoint/permission contract, plus the live generator and, when live generation succeeds, uploads the generated compact pack as a short-retention workflow artifact for audit.
+Pull-request country-data validation runs with **read-only repository permission**. It validates the checked-in pack, tests the generator, verifies the public endpoint contract and can generate an audit candidate pack without mutating the repository.
 
-Scheduled/manual updater execution consumes that validated artifact. Before changing the private bundled pack it publishes the exact bytes to the public mirror in `cbkii/media`, branch `netveil-data`, path `netveil-data/country-ip-pack.json`, then anonymously reads the mirror back and validates it again. Only after successful public publication does it commit the private bundled copy with force-with-lease protection.
+Scheduled/manual execution can update the canonical pack only when running against authoritative `main`. The write job:
 
-Cross-repository publication requires repository secret `NETVEIL_DATA_TOKEN`, configured as a fine-grained token with **Contents: write** access to `cbkii/media`. The application never receives or embeds this token.
+1. downloads the validated generated artifact from the read-only job;
+2. validates it again;
+3. confirms `main` has not moved;
+4. compares material dataset content while ignoring a generation timestamp that changed by itself;
+5. creates no commit when the material dataset is unchanged;
+6. if changed, commits only `app/src/main/assets/country-ip-pack.json` using the job-scoped `GITHUB_TOKEN` with `contents: write`;
+7. pushes with branch-movement/lease protection;
+8. verifies the immutable commit-specific raw URL;
+9. verifies the stable `main` raw URL with bounded retries.
 
-The private repository's normal `GITHUB_TOKEN` remains scoped to NetVeil. The public-mirror token is supplied only to the dedicated publication step, while normal PR validation remains non-mutating.
+A workflow dispatch from a non-main branch may validate/generate data, but it cannot update the canonical public dataset.
+
+Normal PR/review CI validates that the public `main` endpoint is accessible and valid without requiring it to equal a feature branch's worktree. Authoritative `main`/post-publication validation additionally requires the remote canonical pack to equal the local canonical pack.
+
+No PAT or repository secret is required for country-data publication.
 
 ## Maintenance
 

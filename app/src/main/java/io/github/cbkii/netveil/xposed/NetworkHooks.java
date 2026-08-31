@@ -6,7 +6,6 @@ import android.net.DhcpInfo;
 import android.net.LinkProperties;
 import android.net.Network;
 import android.net.NetworkCapabilities;
-import android.net.NetworkInfo;
 import android.net.NetworkRequest;
 import android.net.wifi.WifiInfo;
 import android.net.wifi.WifiManager;
@@ -16,6 +15,7 @@ import android.provider.Settings;
 import io.github.cbkii.netveil.config.Ipv4;
 import io.github.cbkii.netveil.config.Profile;
 import io.github.cbkii.netveil.network.InterfaceClassifier;
+import io.github.cbkii.netveil.network.ProjectionValues;
 import io.github.cbkii.netveil.network.PropertyMaskPolicy;
 import io.github.libxposed.api.XposedInterface;
 
@@ -48,7 +48,6 @@ final class NetworkHooks {
     private final LinkPropertiesSanitizer links;
     private final HookHealth health;
 
-    private final WeakIdentitySet<NetworkInfo> legacyVpnInfos = new WeakIdentitySet<>();
     private final Set<Object> suppressedVpnRequests =
             Collections.synchronizedSet(Collections.newSetFromMap(new IdentityHashMap<>()));
 
@@ -68,7 +67,6 @@ final class NetworkHooks {
         installConnectivityHooks();
         installNetworkCapabilitiesHooks();
         installLinkPropertiesHooks();
-        installLegacyHooks();
         installNetworkInterfaceHooks();
         installSocketHooks();
         installSettingsHooks();
@@ -102,8 +100,6 @@ final class NetworkHooks {
                 this::filterAllNetworks);
         hookAfter(HookHealth.Requirement.REQUIRED, ConnectivityManager.class, "getDefaultProxy", noArgs(),
                 (chain, original) -> p.hideProxy ? null : original);
-        hookAfter(HookHealth.Requirement.OPTIONAL, ConnectivityManager.class, "getNetworkForType",
-                new Class<?>[]{int.class}, this::hideLegacyVpnNetworkHandle);
     }
 
     private void installNetworkCapabilitiesHooks() {
@@ -148,21 +144,6 @@ final class NetworkHooks {
                 new Class<?>[]{Parcel.class, int.class}, this::writeLinkPropertiesParcel);
     }
 
-    private void installLegacyHooks() {
-        hookAfter(HookHealth.Requirement.OPTIONAL, ConnectivityManager.class, "getNetworkInfo",
-                new Class<?>[]{int.class}, this::legacyNetworkInfoByType);
-        hookAfter(HookHealth.Requirement.OPTIONAL, ConnectivityManager.class, "getAllNetworkInfo", noArgs(),
-                this::filterLegacyNetworkInfo);
-        hookAfter(HookHealth.Requirement.OPTIONAL, ConnectivityManager.class, "getActiveNetworkInfo", noArgs(),
-                this::tagActiveLegacyNetworkInfo);
-        hookAfter(HookHealth.Requirement.OPTIONAL, NetworkInfo.class, "getType", noArgs(),
-                this::legacyNetworkType);
-        hookAfter(HookHealth.Requirement.OPTIONAL, NetworkInfo.class, "getTypeName", noArgs(),
-                this::legacyNetworkTypeName);
-        hookAfter(HookHealth.Requirement.OPTIONAL, NetworkInfo.class, "getExtraInfo", noArgs(),
-                this::legacyExtraInfo);
-    }
-
     private void installNetworkInterfaceHooks() {
         hookAfter(HookHealth.Requirement.REQUIRED, NetworkInterface.class, "getNetworkInterfaces", noArgs(),
                 this::filterNetworkInterfaces);
@@ -191,9 +172,12 @@ final class NetworkHooks {
                 this::spoofLocalInetAddress);
         hookAfter(HookHealth.Requirement.OPTIONAL, ServerSocket.class, "getLocalSocketAddress", noArgs(),
                 this::spoofLocalSocketAddress);
-        hookOptionalClass("sun.nio.ch.SocketChannelImpl", "getLocalAddress", noArgs(), this::spoofLocalSocketAddress);
-        hookOptionalClass("sun.nio.ch.DatagramChannelImpl", "getLocalAddress", noArgs(), this::spoofLocalSocketAddress);
-        hookOptionalClass("sun.nio.ch.ServerSocketChannelImpl", "getLocalAddress", noArgs(), this::spoofLocalSocketAddress);
+        hookOptionalClass("sun.nio.ch.SocketChannelImpl", "getLocalAddress", noArgs(),
+                this::spoofLocalSocketAddress);
+        hookOptionalClass("sun.nio.ch.DatagramChannelImpl", "getLocalAddress", noArgs(),
+                this::spoofLocalSocketAddress);
+        hookOptionalClass("sun.nio.ch.ServerSocketChannelImpl", "getLocalAddress", noArgs(),
+                this::spoofLocalSocketAddress);
     }
 
     private void installSettingsHooks() {
@@ -229,7 +213,7 @@ final class NetworkHooks {
         DhcpInfo input = (DhcpInfo) original;
         DhcpInfo out = new DhcpInfo();
         out.ipAddress = Ipv4.toWifiInt(p.ipv4);
-        out.gateway = Ipv4.toWifiInt(p.gateway);
+        out.gateway = ProjectionValues.dhcpGateway(p);
         out.netmask = prefixToWifiInt(p.prefixLength);
         out.dns1 = p.dns.isEmpty() ? 0 : Ipv4.toWifiInt(p.dns.get(0));
         out.dns2 = p.dns.size() < 2 ? 0 : Ipv4.toWifiInt(p.dns.get(1));
@@ -273,16 +257,11 @@ final class NetworkHooks {
                 continue;
             }
             Object raw = origin.callByName(manager, "getNetworkCapabilities", network);
-            if (raw instanceof NetworkCapabilities && capabilities.isRawVpn((NetworkCapabilities) raw)) continue;
+            if (raw instanceof NetworkCapabilities
+                    && capabilities.isRawVpn((NetworkCapabilities) raw)) continue;
             out.add(network);
         }
         return out.toArray(new Network[0]);
-    }
-
-    private Object hideLegacyVpnNetworkHandle(XposedInterface.Chain chain, Object original) {
-        if (!p.hideVpn) return original;
-        Object type = HookChainCompat.arg(chain, 0);
-        return type instanceof Integer && ((Integer) type) == ConnectivityManager.TYPE_VPN ? null : original;
     }
 
     private void hookOptionalCapabilityGetter(String name) {
@@ -314,7 +293,9 @@ final class NetworkHooks {
         if (!(receiver instanceof NetworkCapabilities) || !(parcel instanceof Parcel)
                 || !(flags instanceof Integer)) return chain.proceed();
         NetworkCapabilities raw = (NetworkCapabilities) receiver;
-        if (!p.hideVpn || capabilities.isSanitized(raw) || !capabilities.isRawVpn(raw)) return chain.proceed();
+        if (!p.hideVpn || capabilities.isSanitized(raw) || !capabilities.isRawVpn(raw)) {
+            return chain.proceed();
+        }
         factory.writeToParcelOrigin(capabilities.sanitize(raw), (Parcel) parcel, (Integer) flags);
         return null;
     }
@@ -324,7 +305,8 @@ final class NetworkHooks {
                 (chain, original) -> projectedLinkGetter(chain, name, original));
     }
 
-    private Object projectedLinkGetter(XposedInterface.Chain chain, String name, Object original) throws Throwable {
+    private Object projectedLinkGetter(XposedInterface.Chain chain, String name,
+                                       Object original) throws Throwable {
         Object receiver = HookChainCompat.receiver(chain);
         if (!(receiver instanceof LinkProperties)) return original;
         LinkProperties raw = (LinkProperties) receiver;
@@ -350,72 +332,6 @@ final class NetworkHooks {
         if (links.isSanitized(raw)) return chain.proceed();
         factory.writeToParcelOrigin(links.sanitize(raw), (Parcel) parcel, (Integer) flags);
         return null;
-    }
-
-    private Object legacyNetworkInfoByType(XposedInterface.Chain chain, Object original) throws Throwable {
-        if (!p.hideVpn) return original;
-        Object type = HookChainCompat.arg(chain, 0);
-        if (type instanceof Integer && ((Integer) type) == ConnectivityManager.TYPE_VPN) {
-            if (original instanceof NetworkInfo) legacyVpnInfos.add((NetworkInfo) original);
-            return null;
-        }
-        return original;
-    }
-
-    private Object filterLegacyNetworkInfo(XposedInterface.Chain chain, Object original) throws Throwable {
-        if (!p.hideVpn || !(original instanceof NetworkInfo[])) return original;
-        List<NetworkInfo> out = new ArrayList<>();
-        for (NetworkInfo info : (NetworkInfo[]) original) {
-            if (info == null) continue;
-            if (rawLegacyType(info) == ConnectivityManager.TYPE_VPN) {
-                legacyVpnInfos.add(info);
-                continue;
-            }
-            out.add(info);
-        }
-        return out.toArray(new NetworkInfo[0]);
-    }
-
-    private Object tagActiveLegacyNetworkInfo(XposedInterface.Chain chain, Object original) throws Throwable {
-        if (p.hideVpn && original instanceof NetworkInfo
-                && rawLegacyType((NetworkInfo) original) == ConnectivityManager.TYPE_VPN) {
-            legacyVpnInfos.add((NetworkInfo) original);
-        }
-        return original;
-    }
-
-    private Object legacyNetworkType(XposedInterface.Chain chain, Object original) {
-        if (!p.hideVpn || !isTaggedLegacyVpn(chain)) return original;
-        return switch (model.presentationTransport()) {
-            case NetworkCapabilities.TRANSPORT_WIFI -> ConnectivityManager.TYPE_WIFI;
-            case NetworkCapabilities.TRANSPORT_CELLULAR -> ConnectivityManager.TYPE_MOBILE;
-            case NetworkCapabilities.TRANSPORT_ETHERNET -> ConnectivityManager.TYPE_ETHERNET;
-            default -> original;
-        };
-    }
-
-    private Object legacyNetworkTypeName(XposedInterface.Chain chain, Object original) {
-        if (!p.hideVpn || !isTaggedLegacyVpn(chain)) return original;
-        return switch (model.presentationTransport()) {
-            case NetworkCapabilities.TRANSPORT_WIFI -> "WIFI";
-            case NetworkCapabilities.TRANSPORT_CELLULAR -> "MOBILE";
-            case NetworkCapabilities.TRANSPORT_ETHERNET -> "ETHERNET";
-            default -> original;
-        };
-    }
-
-    private Object legacyExtraInfo(XposedInterface.Chain chain, Object original) {
-        return p.hideVpn && isTaggedLegacyVpn(chain) ? null : original;
-    }
-
-    private boolean isTaggedLegacyVpn(XposedInterface.Chain chain) {
-        Object receiver = HookChainCompat.receiver(chain);
-        return receiver instanceof NetworkInfo && legacyVpnInfos.contains((NetworkInfo) receiver);
-    }
-
-    private int rawLegacyType(NetworkInfo info) throws Throwable {
-        Object value = origin.call(info, NetworkInfo.class, "getType", noArgs());
-        return value instanceof Integer ? (Integer) value : Integer.MIN_VALUE;
     }
 
     private Object filterNetworkInterfaces(XposedInterface.Chain chain, Object original) {
@@ -451,7 +367,9 @@ final class NetworkHooks {
             if (kind == InterfaceClassifier.Kind.VPN && p.hideVpn) return null;
             if (kind == InterfaceClassifier.Kind.CLAT) return null;
             if (kind != InterfaceClassifier.Kind.LOOPBACK
-                    && (model.presentationName() == null || !name.equals(model.presentationName()))) return null;
+                    && (model.presentationName() == null || !name.equals(model.presentationName()))) {
+                return null;
+            }
         }
         if (original instanceof NetworkInterface) {
             NetworkInterface networkInterface = (NetworkInterface) original;
@@ -469,7 +387,9 @@ final class NetworkHooks {
         NetworkInterface networkInterface = (NetworkInterface) receiver;
         InterfaceClassifier.Kind kind = InterfaceClassifier.classify(networkInterface.getName());
         if (kind == InterfaceClassifier.Kind.LOOPBACK) return original;
-        if (kind == InterfaceClassifier.Kind.VPN) return p.hideVpn ? Collections.emptyEnumeration() : original;
+        if (kind == InterfaceClassifier.Kind.VPN) {
+            return p.hideVpn ? Collections.emptyEnumeration() : original;
+        }
         if (!isPresentation(networkInterface)) return Collections.emptyEnumeration();
 
         List<InetAddress> out = new ArrayList<>();
@@ -484,13 +404,16 @@ final class NetworkHooks {
         return Collections.enumeration(out);
     }
 
-    private Object spoofInterfaceAddressObjects(XposedInterface.Chain chain, Object original) throws Throwable {
+    private Object spoofInterfaceAddressObjects(XposedInterface.Chain chain, Object original)
+            throws Throwable {
         Object receiver = HookChainCompat.receiver(chain);
         if (!(receiver instanceof NetworkInterface)) return original;
         NetworkInterface networkInterface = (NetworkInterface) receiver;
         InterfaceClassifier.Kind kind = InterfaceClassifier.classify(networkInterface.getName());
         if (kind == InterfaceClassifier.Kind.LOOPBACK) return original;
-        if (kind == InterfaceClassifier.Kind.VPN) return p.hideVpn ? Collections.emptyList() : original;
+        if (kind == InterfaceClassifier.Kind.VPN) {
+            return p.hideVpn ? Collections.emptyList() : original;
+        }
         if (!isPresentation(networkInterface)) return Collections.emptyList();
 
         List<InterfaceAddress> out = new ArrayList<>();
@@ -522,7 +445,8 @@ final class NetworkHooks {
         if (!(original instanceof InetSocketAddress)) return original;
         InetSocketAddress socket = (InetSocketAddress) original;
         InetAddress address = socket.getAddress();
-        if (!(address instanceof Inet4Address) || address.isLoopbackAddress() || address.isAnyLocalAddress()) {
+        if (!(address instanceof Inet4Address) || address.isLoopbackAddress()
+                || address.isAnyLocalAddress()) {
             return original;
         }
         return new InetSocketAddress(model.ipv4, socket.getPort());
@@ -545,7 +469,9 @@ final class NetworkHooks {
     private Object spoofJavaProperty(XposedInterface.Chain chain, Object original) {
         if (!p.hideProxy) return original;
         Object key = HookChainCompat.arg(chain, 0);
-        if (!(key instanceof String) || !PropertyMaskPolicy.isJavaProxyKey((String) key)) return original;
+        if (!(key instanceof String) || !PropertyMaskPolicy.isJavaProxyKey((String) key)) {
+            return original;
+        }
         Object suppliedDefault = HookChainCompat.arg(chain, 1);
         return suppliedDefault instanceof String ? suppliedDefault : null;
     }
@@ -560,7 +486,7 @@ final class NetworkHooks {
 
         return switch (kind) {
             case DNS -> dnsProperty(key, hidden);
-            case GATEWAY -> p.gateway;
+            case GATEWAY -> ProjectionValues.gatewayProperty(p, hidden);
             case IPV4 -> p.ipv4;
             case PROXY -> p.hideProxy ? hidden : original;
             case NONE -> original;
@@ -583,7 +509,8 @@ final class NetworkHooks {
         }
         if (count == 0) {
             health.expected(HookHealth.Requirement.REQUIRED);
-            health.missing(HookHealth.Requirement.REQUIRED, ConnectivityManager.class.getName() + "." + name);
+            health.missing(HookHealth.Requirement.REQUIRED,
+                    ConnectivityManager.class.getName() + "." + name);
         }
     }
 
@@ -597,7 +524,8 @@ final class NetworkHooks {
         }
         if (count == 0) {
             health.expected(HookHealth.Requirement.REQUIRED);
-            health.missing(HookHealth.Requirement.REQUIRED, ConnectivityManager.class.getName() + "." + name);
+            health.missing(HookHealth.Requirement.REQUIRED,
+                    ConnectivityManager.class.getName() + "." + name);
         }
     }
 
@@ -621,7 +549,8 @@ final class NetworkHooks {
 
     private boolean requestHasVpn(NetworkRequest request) {
         try {
-            Object value = origin.callByName(request, "hasTransport", NetworkCapabilities.TRANSPORT_VPN);
+            Object value = origin.callByName(
+                    request, "hasTransport", NetworkCapabilities.TRANSPORT_VPN);
             return value instanceof Boolean && (Boolean) value;
         } catch (Throwable ignored) {
             return false;
@@ -635,7 +564,8 @@ final class NetworkHooks {
             Object value = HookChainCompat.arg(chain, i);
             if (value == null) continue;
             String className = params[i].getName();
-            if (className.contains("NetworkCallback") || className.equals("android.app.PendingIntent")) {
+            if (className.contains("NetworkCallback")
+                    || className.equals("android.app.PendingIntent")) {
                 suppressedVpnRequests.add(value);
             }
         }
@@ -739,7 +669,8 @@ final class NetworkHooks {
         health.installed(requirement, handle);
     }
 
-    private void hookOptionalClass(String className, String name, Class<?>[] params, Transformer transformer) {
+    private void hookOptionalClass(String className, String name, Class<?>[] params,
+                                   Transformer transformer) {
         health.expected(HookHealth.Requirement.OPTIONAL);
         String label = className + "." + name;
         try {
