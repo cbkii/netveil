@@ -231,16 +231,21 @@ It declares a launcher-intent `<queries>` rule so normal launchable apps can app
 
 NetVeil does **not** request `QUERY_ALL_PACKAGES`.
 
-The intended install-time permission allow-list is exactly:
+The intended normal Android permission allow-list is exactly:
 
 ```text
+android.permission.ACCESS_NETWORK_STATE
 android.permission.INTERNET
 android.permission.RECEIVE_BOOT_COMPLETED
 ```
 
 `INTERNET` is used only for the optional country-data pack.
 
+`ACCESS_NETWORK_STATE` is required by modern Android when the persisted `JobScheduler` refresh job declares a connectivity constraint.
+
 `RECEIVE_BOOT_COMPLETED` is required by Android for the optional persisted `JobScheduler` refresh job. NetVeil does not add an exported boot receiver for this purpose.
+
+These are normal permissions and do not create runtime permission prompts.
 
 CI and Manual Release verify the exact APK permission set.
 
