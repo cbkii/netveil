@@ -171,12 +171,15 @@ For data sources, filtering rules and maintenance details, see [Country data](do
 
 NetVeil has no analytics, advertising or telemetry.
 
-The APK currently requests only these install-time permissions:
+The APK declares these normal Android permissions:
 
 | Permission | Why it is used |
 | --- | --- |
 | `android.permission.INTERNET` | Download the optional public country-data pack. |
+| `android.permission.ACCESS_NETWORK_STATE` | Allow the optional scheduled refresh job to require network connectivity on modern Android. |
 | `android.permission.RECEIVE_BOOT_COMPLETED` | Allow Android to preserve the optional scheduled country-data refresh job across reboot. |
+
+These are normal permissions and do not create runtime permission prompts.
 
 NetVeil does not upload your profiles, installed-app list, selected spoofed values, device identifiers or Vector/LSPosed scope.
 
