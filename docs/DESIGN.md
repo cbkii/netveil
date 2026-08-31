@@ -29,6 +29,22 @@ A profile contains:
 
 Randomisation selects whole identities and whole DNS sets. Global derives a package-specific stable seed from the Global seed and package name; Custom uses its own seed.
 
+## Basic and Advanced configuration
+
+Basic and Advanced are two editors for the same configuration model, not two runtime layers.
+
+Basic constructs an ordinary Global `Profile` through `RecommendedProfileFactory`. It uses high-confidence/non-anonymous candidates from the selected country, route-hidden identities, bundled DNS sets, randomisation and the recommended privacy switches. The generated object is only a draft until an explicit Basic Apply/Update action commits it.
+
+`DnsPresetProvider` is a tiny bundled mapping shared by Basic and Advanced. Each entry is a complete DNS set; there is no DNS discovery service or separate DNS runtime model.
+
+Small Basic ownership metadata records the generating country/recommendation fingerprint. It exists only so the UI can distinguish a still-Basic-managed Global profile from one subsequently customised in Advanced. Hook/runtime resolution ignores this metadata completely.
+
+The Basic override switch controls only whether an explicit Basic write may replace an Advanced-owned Global profile. It is not profile precedence and does not add an overlay. Country/toggle changes alone never write Global.
+
+Generated Basic replacement is constructed and validated before one preference commit writes both the ordinary Global profile and its ownership metadata. A failed country refresh/generation/save therefore does not clear the previous working Global profile.
+
+Advanced remains the full editor. Saving a materially different Global profile clears Basic ownership metadata; the saved profile itself remains the same single Global object resolved by runtime code.
+
 ## Network identities
 
 ### Route-hidden
@@ -67,7 +83,9 @@ Required hook installation is transactional. An incomplete required hook set is 
 
 ## Country data
 
-Country presets are only an input source for ordinary route-hidden identities. The repository owns one canonical pack, bundles it into the APK and serves the same file from public `main`. Refresh is bounded, validated, anti-rollback and process-serialised before atomic cache replacement.
+Country presets are an input source for ordinary route-hidden identities. The repository owns one canonical pack, bundles it into the APK and serves the same file from public `main`. Refresh is bounded, validated, anti-rollback and process-serialised before atomic cache replacement.
+
+Normal Basic operation always starts from the best valid local pack. A stale background refresh can change the available recommendation but cannot rewrite a saved profile. The explicit Basic **Refresh & replace Global** operation is the only combined refresh/profile-write path, and it writes only after a complete replacement recommendation has been generated successfully.
 
 ## Non-goals
 

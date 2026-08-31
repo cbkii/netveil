@@ -19,6 +19,47 @@ Use this as the physical runtime sheet for [RELEASE-READINESS.md](RELEASE-READIN
 - [ ] Country-data cache and automatic-refresh settings are unaffected by that profile-store reset.
 - [ ] No incompatible profile values are translated into current identities or policies.
 
+## Basic setup
+
+Start from an empty current profile store.
+
+- [ ] NetVeil opens in **Basic** mode.
+- [ ] Basic selects the saved country when present; true first-run selection follows a supported device-locale country and otherwise falls back to Australia.
+- [ ] Basic immediately builds a usable draft from bundled/valid cached data without waiting for network access.
+- [ ] The draft contains high-confidence/non-anonymous country identities, hidden routes, 2–4 bundled DNS sets, randomisation enabled, VPN/proxy hiding enabled and IPv6 suppression enabled.
+- [ ] Opening Basic and changing Country do not create/save Global.
+- [ ] Guidance clearly indicates that Apply is required or Advanced can be used and saved.
+- [ ] **Apply Global profile** creates the one ordinary Global profile.
+- [ ] Saved Basic state reports `Global profile active · <country>`.
+- [ ] A changed recommendation reports an available Global update rather than silently applying it.
+- [ ] Background country-data refresh never rewrites the saved Global profile.
+- [ ] **Refresh & replace Global** refreshes, regenerates and replaces only after a complete valid recommendation is available.
+- [ ] Failed manual refresh leaves the previous saved Global profile unchanged and reports the failure.
+
+## Basic/Advanced ownership
+
+- [ ] A Basic-generated Global profile is fully visible/editable in Advanced.
+- [ ] Saving a materially customised Global through Advanced causes Basic to report an Advanced-customised Global state.
+- [ ] With **Allow Basic to replace Advanced Global** off, Basic Apply/Update/Refresh cannot overwrite that Advanced-owned profile.
+- [ ] Changing only the override toggle never rewrites Global.
+- [ ] With the toggle on, an explicit Basic replacement action can replace the Advanced-owned Global.
+- [ ] An incomplete/invalid Advanced-owned Global remains protected while the toggle is off.
+- [ ] There is still only one runtime Global profile; no Basic overlay/precedence state affects hook resolution.
+
+## Advanced configuration UX
+
+- [ ] **Advanced** retains target selection, Global/Custom/Off, profile enabled state, identities, route mode, country add/replace, DNS editing, randomisation, privacy, effective preview, Save and Reroll.
+- [ ] **Populate recommended DNS** fills the selected country's bundled 2–4 complete DNS sets without saving them.
+- [ ] The populated DNS lines can be edited/removed before Save.
+- [ ] **Clear selected profile** appears immediately below **Load selected profile**.
+- [ ] Clear confirmation is simply `Clear <Profile name>?` with Cancel/Clear actions.
+- [ ] Clearing Global retains separate per-app Custom profiles.
+- [ ] Clearing a per-app stored profile/policy returns the package to ordinary Global inheritance.
+- [ ] Clear is disabled when the selected target has no stored state.
+- [ ] The previous duplicate bottom Reset/Remove action is absent.
+- [ ] Loading/switching/clearing/replacing with meaningful unsaved Advanced edits prompts `Discard unsaved changes?` once.
+- [ ] Cancel retains edits; Discard proceeds; Save returns the editor to a clean state.
+
 ## Global and per-app resolution
 
 Create a valid Global profile and exercise at least two scoped packages.
@@ -27,7 +68,7 @@ Create a valid Global profile and exercise at least two scoped packages.
 - [ ] **Use Global** uses Global.
 - [ ] **Custom** uses the package-specific profile.
 - [ ] **Off for this app** installs no NetVeil profile hooks.
-- [ ] Removing an override returns the package to Global.
+- [ ] Clearing an override returns the package to Global.
 - [ ] A package outside framework scope remains unaffected.
 - [ ] A later package loaded into an already-claimed process cannot install a second NetVeil identity.
 
@@ -122,15 +163,16 @@ Test without and with the normal VPN active.
 - [ ] Malformed/oversized/older/conflicting data leaves the previous valid data intact.
 - [ ] Manual and periodic refresh cannot race one another over the cache/temp file.
 - [ ] Automatic refresh is off by default and persists the selected Monthly/Weekly/Daily cadence when enabled.
-- [ ] Refresh changes only country-data cache, never saved profiles.
+- [ ] Ordinary refresh changes only country-data cache, never saved profiles.
 
-## Configuration UX
+## General configuration UX
 
-- [ ] Global is the default target.
+- [ ] Global is the default Advanced target.
 - [ ] Saved and launchable targets are visible without `QUERY_ALL_PACKAGES`.
 - [ ] Manual package entry works.
 - [ ] Editing target text cannot silently save the visible form under another package.
 - [ ] Inline errors and first-invalid-field focus are usable.
+- [ ] Basic remains compact at normal and large font/display scale.
 - [ ] Edge-to-edge, cutout, gesture/three-button navigation, landscape and large font/display scaling remain usable.
 
 ## Expected disclosures

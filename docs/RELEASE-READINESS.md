@@ -22,6 +22,19 @@ Vector/LSPosed scope remains authoritative. `system_server` is rejected, and one
 - Explicit identities require a coherent IPv4/prefix/gateway tuple.
 - Randomisation selects complete identities and complete DNS sets only.
 
+### Basic/Advanced configuration contract
+
+- Basic is the default configuration surface.
+- Fresh Basic state creates only a generated draft; opening the app or selecting a country does not save/activate Global.
+- Basic recommendation uses high-confidence/non-anonymous country candidates, route-hidden identities, bundled DNS sets, randomisation enabled, VPN/proxy hiding enabled and IPv6 suppression enabled.
+- The bundled DNS catalogue is small, locally auditable and shared by Basic and Advanced; there is no DNS-discovery service.
+- Basic and Advanced write the same one Global runtime profile. Basic metadata is UI ownership/fingerprint state only and is ignored by runtime resolution.
+- Saving a materially different Global profile in Advanced makes it Advanced-owned.
+- With Basic replacement permission off, no explicit Basic write may overwrite an Advanced-owned Global profile, including an incomplete one.
+- Changing Country or the replacement-permission toggle alone never writes Global.
+- `Clear selected profile` is the authoritative destructive profile action; Global clear retains per-app Custom profiles, while per-app clear returns that package to Global inheritance.
+- Meaningful unsaved Advanced edits are protected before a destructive/context-replacing action.
+
 ## Framework/platform contract
 
 Release source must contain:
@@ -62,7 +75,9 @@ Vector v2.2+ is the primary qualified framework baseline. Automatic API-102 hot 
 - Downloaded data is bounded HTTPS input and fully validated before mutation.
 - Older data and same-version conflicting data are rejected.
 - Cache replacement is atomic or fails without destroying the last valid data.
-- A background refresh never rewrites saved profiles.
+- Ordinary/background refresh never rewrites saved profiles.
+- Basic stale-data checking may update the available recommendation only.
+- The explicit Basic **Refresh & replace Global** path may write Global only after online refresh succeeds (updated or confirmed unchanged), the selected-country recommendation is fully regenerated/validated, and the complete profile plus ownership metadata can be committed. Any failure retains the previous saved Global profile.
 
 See [COUNTRY-DATA.md](COUNTRY-DATA.md) for source/provenance requirements.
 
@@ -80,7 +95,7 @@ Every final PR/main head must pass:
 2. workflow/source sanity;
 3. deterministic country generator and bundled-pack validation;
 4. public same-repository country-refresh contract;
-5. JVM tests for strict profile schema, Global/Custom/Off resolution, network identities, projection boundary semantics and country-pack behaviour;
+5. JVM tests for strict profile schema, Global/Custom/Off resolution, network identities, projection boundary semantics, country-pack behaviour, recommended Basic profile generation, Basic ownership classification and bundled DNS presets;
 6. unsuppressed `lintRelease`;
 7. debug APK assembly;
 8. ephemeral-signed release APK assembly;
@@ -118,10 +133,10 @@ Physical evidence must include:
 - probe outputs for covered APIs;
 - public-IP observation proving routing is unchanged.
 
-A green CI build does not prove hidden/SystemApi construction and Parcel behaviour on a physical Android device.
+A green CI build does not prove Android Activity interaction details, hidden/SystemApi construction or Parcel behaviour on a physical Android device. Basic/Advanced mode switching, dirty-state dialogs, locale defaults, refresh failure presentation and touch/layout behaviour therefore remain explicit physical checks.
 
 ## Merge/release decision
 
-A PR is merge-ready when its exact final head is based on current `main`, all required CI is green, the diff is audited, and no unresolved valid review finding remains.
+A standalone PR is merge-ready when its exact final head is based on the intended current target branch, all required CI is green, the diff is audited, and no unresolved valid review finding remains. A stacked PR may be review-ready against its current prerequisite branch; it becomes independently mergeable to `main` only after the prerequisite has landed and the stack is rebased/retargeted cleanly.
 
-A release is ready only after that source is merged and the required physical matrix passes on the intended release APK. Release publication is a separate explicit action from PR merge-readiness.
+A release is ready only after the full source stack is merged and the required physical matrix passes on the intended release APK. Release publication is a separate explicit action from PR merge-readiness.
