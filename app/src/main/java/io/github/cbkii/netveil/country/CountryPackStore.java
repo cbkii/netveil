@@ -53,9 +53,11 @@ public final class CountryPackStore {
         if (!Files.isRegularFile(cache)) return new Loaded(bundled, Source.BUNDLED);
         try {
             CountryPack cached = CountryPack.parse(readUtf8(cache));
-            return cached.isAtLeastAsNewAs(bundled)
-                    ? new Loaded(cached, Source.ONLINE_CACHE)
-                    : new Loaded(bundled, Source.BUNDLED);
+            CountryPack.UpdateDisposition cacheState = CountryPack.classifyUpdate(bundled, cached);
+            return switch (cacheState) {
+                case UPDATED, UNCHANGED -> new Loaded(cached, Source.ONLINE_CACHE);
+                case OLDER, SAME_VERSION_CONFLICT -> new Loaded(bundled, Source.BUNDLED);
+            };
         } catch (IOException | JSONException ignored) {
             return new Loaded(bundled, Source.BUNDLED);
         }
