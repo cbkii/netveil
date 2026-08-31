@@ -25,7 +25,7 @@
         android:strokeWidth="8.5"
         android:strokeLineCap="round"
         android:strokeLineJoin="round"
-        android:pathData="M25,45C39,45 43,48 50,54C58,62 63,62 79,62" />
+        android:pathData="M25.25,45C39,45 43,48 50,54C58,62 63,62 79,62" />
     <path
         android:fillColor="#14B8A6"
         android:pathData="M77,54L87,62L77,68Z" />
@@ -35,7 +35,7 @@
         android:strokeWidth="8.5"
         android:strokeLineCap="round"
         android:strokeLineJoin="round"
-        android:pathData="M25,63C39,63 43,60 50,54C58,46 63,46 79,46" />
+        android:pathData="M25.25,63C39,63 43,60 50,54C58,46 63,46 79,46" />
     <path
         android:fillColor="#3B82F6"
         android:pathData="M77,40L87,46L77,52Z" />
