@@ -15,10 +15,10 @@ This is a configuration convenience feature. It does **not** prove that a candid
 The app intentionally exposes only:
 
 - country;
-- **Exclude medium/low-confidence providers** (on by default);
+- **High-confidence providers only** (on by default);
 - **Exclude known VPN / proxy / Tor addresses** (on by default);
 - **Add to list** or **Replace list**;
-- manual **Refresh country data now**;
+- manual **Refresh now**;
 - optional automatic refresh (off by default; monthly by default when enabled, with weekly/daily choices).
 
 There is no per-ISP/ASN management UI. Provider and routing detail remain generation/audit metadata.
@@ -37,15 +37,21 @@ public routing/allocation/provider sources
               v
 .github/scripts/generate_country_pack.py
               |
-              v
-app/src/main/assets/country-ip-pack.json
-              |
-       bundled APK fallback
-              |
-              +---- HTTPS refresh ----> app-private validated cache
+              +--------------------------+
+              |                          |
+              v                          v
+app/src/main/assets/             anonymous public mirror
+country-ip-pack.json             cbkii/media:netveil-data
+              |                          |
+       bundled APK fallback              |
+              |                          |
+              +---- HTTPS refresh <------+
+                         |
+                         v
+                app-private validated cache
 ```
 
-The Android app does not scrape RIR, BGP, PeeringDB, Tor or blocklist services itself. It downloads only the compact generated NetVeil pack.
+The Android app does not scrape RIR, BGP, PeeringDB, Tor or blocklist services itself. It downloads only the compact generated NetVeil pack. The source repository can remain private because the installed app reads the compact mirror anonymously and embeds no GitHub credential.
 
 Fallback order is:
 
@@ -151,13 +157,19 @@ Confidence is internal evidence quality, not a claim about a specific person or 
 - **Medium**: current BGP origin and country/provider evidence with weaker access-provider corroboration.
 - **Low**: reserved for weaker candidates; excluded by the default UI policy.
 
-The normal UI defaults to excluding medium/low confidence candidates.
+The normal UI defaults to high-confidence providers only.
 
 ## Network permission and privacy
 
-NetVeil requests Android `INTERNET` solely so the configuration app/background refresh job can fetch the small public country pack over HTTPS.
+NetVeil requests three normal Android permissions for this feature:
 
-It does **not** send:
+- `INTERNET` — fetches the small public country pack over HTTPS;
+- `ACCESS_NETWORK_STATE` — required by modern Android when a `JobScheduler` job declares a connectivity constraint;
+- `RECEIVE_BOOT_COMPLETED` — required for a `JobScheduler` job persisted across reboot.
+
+None of these is a runtime permission prompt. Automatic refresh itself remains off by default.
+
+NetVeil does **not** send:
 
 - NetVeil profile contents;
 - selected spoofed IP/DNS values;
@@ -166,13 +178,11 @@ It does **not** send:
 - device identifiers;
 - analytics or telemetry.
 
-`RECEIVE_BOOT_COMPLETED` is also declared because Android requires it for a `JobScheduler` job marked persisted across reboot. Automatic refresh itself is off by default.
-
 The Xposed module's target-process networking behaviour is unchanged by these permissions; country presets only populate the same canonical profile model used by manual values.
 
 ## Refresh and failure policy
 
-Repository automation performs a bounded live regeneration daily. Installed apps refresh only when the user presses **Refresh country data now** or explicitly enables periodic refresh.
+Repository automation performs a bounded live regeneration daily. Installed apps refresh only when the user presses **Refresh now** or explicitly enables periodic refresh.
 
 When periodic refresh is enabled:
 
@@ -180,18 +190,26 @@ When periodic refresh is enabled:
 - weekly and daily are optional;
 - Android `JobScheduler` is used rather than adding AndroidX/WorkManager;
 - a network constraint is required;
+- scheduling is transactional: a rejected job does not leave automatic refresh recorded as enabled;
+- startup restoration failures are contained and disable automatic refresh rather than crashing the Activity;
 - execution is inexact and battery/Doze-aware;
 - failures retain the last valid pack and stay on the configured cadence rather than creating an additional retry schedule.
 
-The configured pack URL must be anonymously HTTPS-readable for online refresh. If the repository/data endpoint is private or unavailable, refresh fails safely and NetVeil continues with cached/bundled data. This is a deployment condition, not a reason to weaken cache validation or add embedded credentials to the APK.
+The installed app currently reads:
+
+`https://raw.githubusercontent.com/cbkii/media/netveil-data/netveil-data/country-ip-pack.json`
+
+CI validates that this endpoint is anonymously HTTPS-readable, stays below the app's 256 KiB download limit, passes the same country-pack validator, and matches the bundled pack used by the APK.
 
 ## Repository automation and permissions
 
-Pull-request country-data validation runs with **read-only repository permission**. It runs deterministic tests plus the live generator and, when live generation succeeds, uploads the generated compact pack as a short-retention workflow artifact for audit.
+Pull-request country-data validation runs with **read-only repository permission**. It runs deterministic tests, the anonymous endpoint/permission contract, plus the live generator and, when live generation succeeds, uploads the generated compact pack as a short-retention workflow artifact for audit.
 
-Only scheduled/manual updater execution receives `contents: write`. That update job consumes the already validated artifact, re-runs pack tests, commits only when bytes changed, and uses a force-with-lease guard so it cannot silently overwrite a branch that moved during execution.
+Scheduled/manual updater execution consumes that validated artifact. Before changing the private bundled pack it publishes the exact bytes to the public mirror in `cbkii/media`, branch `netveil-data`, path `netveil-data/country-ip-pack.json`, then anonymously reads the mirror back and validates it again. Only after successful public publication does it commit the private bundled copy with force-with-lease protection.
 
-This separation keeps normal PR validation non-mutating while still making the exact live-generated pack inspectable.
+Cross-repository publication requires repository secret `NETVEIL_DATA_TOKEN`, configured as a fine-grained token with **Contents: write** access to `cbkii/media`. The application never receives or embeds this token.
+
+The private repository's normal `GITHUB_TOKEN` remains scoped to NetVeil. The public-mirror token is supplied only to the dedicated publication step, while normal PR validation remains non-mutating.
 
 ## Maintenance
 
