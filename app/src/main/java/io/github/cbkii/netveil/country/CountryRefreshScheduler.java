@@ -121,15 +121,15 @@ public final class CountryRefreshScheduler {
     }
 
     private static ScheduleResult schedule(Context context, Frequency frequency) {
-        JobScheduler scheduler = context.getSystemService(JobScheduler.class);
-        if (scheduler == null) return ScheduleResult.failure("JobScheduler is unavailable");
-        JobInfo job = new JobInfo.Builder(JOB_ID,
-                new ComponentName(context, CountryRefreshJobService.class))
-                .setRequiredNetworkType(JobInfo.NETWORK_TYPE_ANY)
-                .setPersisted(true)
-                .setPeriodic(frequency.intervalMillis)
-                .build();
         try {
+            JobScheduler scheduler = context.getSystemService(JobScheduler.class);
+            if (scheduler == null) return ScheduleResult.failure("JobScheduler is unavailable");
+            JobInfo job = new JobInfo.Builder(JOB_ID,
+                    new ComponentName(context, CountryRefreshJobService.class))
+                    .setRequiredNetworkType(JobInfo.NETWORK_TYPE_ANY)
+                    .setPersisted(true)
+                    .setPeriodic(frequency.intervalMillis)
+                    .build();
             int result = scheduler.schedule(job);
             return result == JobScheduler.RESULT_SUCCESS
                     ? ScheduleResult.success()
@@ -140,9 +140,9 @@ public final class CountryRefreshScheduler {
     }
 
     private static ScheduleResult cancel(Context context) {
-        JobScheduler scheduler = context.getSystemService(JobScheduler.class);
-        if (scheduler == null) return ScheduleResult.success();
         try {
+            JobScheduler scheduler = context.getSystemService(JobScheduler.class);
+            if (scheduler == null) return ScheduleResult.success();
             scheduler.cancel(JOB_ID);
             return ScheduleResult.success();
         } catch (RuntimeException e) {
