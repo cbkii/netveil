@@ -23,7 +23,13 @@ public final class CountryRefreshJobService extends JobService {
             try {
                 CountryPackStore.RefreshResult result = CountryPackStore.refreshBlocking(this);
                 if (!stopped) {
-                    CountryRefreshScheduler.recordRefreshResult(this, result);
+                    try {
+                        CountryRefreshScheduler.recordRefreshResult(this, result);
+                    } catch (RuntimeException ignored) {
+                        // A local metadata persistence failure must not crash the app process or
+                        // disrupt the configured periodic cadence. The validated data/cache state
+                        // remains authoritative and can be reflected on the next successful run.
+                    }
                 }
             } finally {
                 if (!stopped) {
