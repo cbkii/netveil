@@ -22,13 +22,15 @@ public final class CountryRefreshJobService extends JobService {
         localExecutor.execute(() -> {
             try {
                 CountryPackStore.RefreshResult result = CountryPackStore.refreshBlocking(this);
-                if (stopped) return;
-                CountryRefreshScheduler.recordRefreshResult(this, result);
-
-                // This is already a periodic job. A transient download failure must not create an
-                // extra retry cadence outside the user's Monthly/Weekly/Daily choice.
-                jobFinished(params, false);
+                if (!stopped) {
+                    CountryRefreshScheduler.recordRefreshResult(this, result);
+                }
             } finally {
+                if (!stopped) {
+                    // This is already a periodic job. A transient download/runtime failure must not
+                    // create an extra retry cadence outside the user's configured frequency.
+                    jobFinished(params, false);
+                }
                 localExecutor.shutdown();
                 if (executor == localExecutor) executor = null;
             }
