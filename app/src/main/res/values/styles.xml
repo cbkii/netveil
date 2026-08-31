@@ -1,6 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <style name="AppTheme" parent="android:style/Theme.Material.Light.NoActionBar">
+    <style name="AppTheme" parent="android:style/Theme.Material.NoActionBar">
         <item name="android:fontFamily">sans</item>
+        <item name="android:windowNoTitle">true</item>
         <item name="android:windowActionModeOverlay">true</item>
+        <item name="android:windowBackground">@color/nv_background</item>
+        <item name="android:colorAccent">@color/nv_primary</item>
+        <item name="android:textColorPrimary">@color/nv_text_primary</item>
+        <item name="android:textColorSecondary">@color/nv_text_secondary</item>
+        <item name="android:statusBarColor">@android:color/transparent</item>
+        <item name="android:navigationBarColor">@color/nv_background</item>
+        <item name="android:windowLightStatusBar">false</item>
+        <item name="android:windowLightNavigationBar">false</item>
     </style>
 </resources>

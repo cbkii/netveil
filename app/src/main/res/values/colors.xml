@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="nv_background">#090E17</color>
+    <color name="nv_surface">#101826</color>
+    <color name="nv_surface_container">#162235</color>
+    <color name="nv_surface_container_high">#1D2D44</color>
+    <color name="nv_outline">#334155</color>
+
+    <color name="nv_text_primary">#F1F5F9</color>
+    <color name="nv_text_secondary">#B8C4D4</color>
+    <color name="nv_text_subtle">#8796AA</color>
+
+    <color name="nv_primary">#7FB3FF</color>
+    <color name="nv_on_primary">#08111D</color>
+    <color name="nv_primary_container">#123A66</color>
+    <color name="nv_on_primary_container">#D8E8FF</color>
+
+    <color name="nv_secondary">#5EEAD4</color>
+    <color name="nv_secondary_container">#103E3A</color>
+    <color name="nv_on_secondary_container">#C5FFF7</color>
+
+    <color name="nv_success">#7ADFA6</color>
+    <color name="nv_success_container">#123B26</color>
+    <color name="nv_success_text">#B9F6CF</color>
+
+    <color name="nv_info">#9CCBFF</color>
+    <color name="nv_info_container">#113A5F</color>
+    <color name="nv_info_text">#D7EAFF</color>
+
+    <color name="nv_warning">#FFD166</color>
+    <color name="nv_warning_container">#4A3500</color>
+    <color name="nv_warning_text">#FFE7A0</color>
+
+    <color name="nv_error">#FFB4AB</color>
+    <color name="nv_error_container">#5D1A1A</color>
+    <color name="nv_error_text">#FFDAD6</color>
+</resources>
