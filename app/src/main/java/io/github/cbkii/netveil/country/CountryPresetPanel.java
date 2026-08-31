@@ -219,6 +219,7 @@ public final class CountryPresetPanel {
         refresh.setEnabled(false);
         ui.setStatus(status, UiFactory.Tone.INFO,
                 "Checking the latest validated country data online…");
+        CountryPackStore.Source fallbackSource = loaded == null ? null : loaded.source;
         ExecutorService executor = Executors.newSingleThreadExecutor();
         executor.execute(() -> {
             try {
@@ -227,14 +228,12 @@ public final class CountryPresetPanel {
                     result = CountryPackStore.refreshBlocking(activity);
                 } catch (Exception e) {
                     result = CountryPackStore.RefreshResult.failure(
-                            System.currentTimeMillis(), loaded == null ? null : loaded.source,
-                            safeMessage(e));
+                            System.currentTimeMillis(), fallbackSource, safeMessage(e));
                 }
                 CountryRefreshScheduler.recordRefreshResult(activity, result);
             } catch (RuntimeException e) {
                 CountryPackStore.RefreshResult failed = CountryPackStore.RefreshResult.failure(
-                        System.currentTimeMillis(), loaded == null ? null : loaded.source,
-                        safeMessage(e));
+                        System.currentTimeMillis(), fallbackSource, safeMessage(e));
                 try {
                     CountryRefreshScheduler.recordRefreshResult(activity, failed);
                 } catch (RuntimeException ignored) {
