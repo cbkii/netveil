@@ -27,15 +27,25 @@ import android.widget.ImageView;
 import android.widget.LinearLayout;
 import android.widget.RadioGroup;
 import android.widget.ScrollView;
+import android.widget.Spinner;
 import android.widget.Switch;
 import android.widget.TextView;
 import android.widget.Toast;
 
+import io.github.cbkii.netveil.config.BasicProfileMetadata;
+import io.github.cbkii.netveil.config.BasicProfileState;
 import io.github.cbkii.netveil.config.ConfigKeys;
+import io.github.cbkii.netveil.config.DnsPresetProvider;
 import io.github.cbkii.netveil.config.Ipv4;
 import io.github.cbkii.netveil.config.NetworkIdentity;
 import io.github.cbkii.netveil.config.Profile;
+import io.github.cbkii.netveil.config.ProfilePersistence;
+import io.github.cbkii.netveil.config.RecommendedProfileFactory;
+import io.github.cbkii.netveil.country.CountryCatalog;
+import io.github.cbkii.netveil.country.CountryPack;
+import io.github.cbkii.netveil.country.CountryPackStore;
 import io.github.cbkii.netveil.country.CountryPresetPanel;
+import io.github.cbkii.netveil.country.CountryRefreshScheduler;
 import io.github.cbkii.netveil.ui.UiFactory;
 
 import java.security.SecureRandom;
@@ -44,13 +54,21 @@ import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 
 /** Lightweight platform-only configuration UI. Vector/LSPosed remains the outer scope gate. */
 public final class MainActivity extends Activity {
     private static final String MODULE_PACKAGE = "dev.ip.netveil";
     private static final String GLOBAL_LABEL = "★ All scoped apps (Global)";
+    private static final String UI_PREFS = "ui_state";
+    private static final String UI_BASIC_COUNTRY = "basic_country";
+    private static final String UI_BASIC_OVERRIDES = "basic_overrides";
+    private static final long BASIC_REFRESH_STALE_MILLIS = 30L * 24L * 60L * 60L * 1000L;
+    private static final String[] MODE_LABELS = {"Basic", "Advanced"};
     private static final String[] POLICY_LABELS = {
             "Use Global", "Custom", "Off for this app"
     };
@@ -63,9 +81,25 @@ public final class MainActivity extends Activity {
     private final List<IdentityEditor> identityEditors = new ArrayList<>();
 
     private SharedPreferences prefs;
+    private SharedPreferences uiPrefs;
     private UiFactory ui;
     private ScrollView scroll;
     private LinearLayout root;
+    private LinearLayout basicContainer;
+    private LinearLayout advancedContainer;
+    private RadioGroup modeChoices;
+
+    private Spinner basicCountry;
+    private Switch basicOverrides;
+    private TextView basicDataStatus;
+    private TextView basicStateStatus;
+    private Button basicApply;
+    private Button basicRefreshReplace;
+    private CountryPackStore.Loaded basicLoaded;
+    private RecommendedProfileFactory.Draft basicDraft;
+    private long basicDraftSeed;
+    private boolean basicRefreshRunning;
+
     private AutoCompleteTextView targetField;
     private LinearLayout policyContainer;
     private RadioGroup policyChoices;
@@ -82,10 +116,12 @@ public final class MainActivity extends Activity {
     private TextView summaryChip;
     private TextView preview;
     private Button reroll;
-    private Button delete;
+    private Button clearProfile;
+    private CountryPresetPanel countryPresetPanel;
 
     private String selectedTarget = ConfigKeys.GLOBAL;
     private String editorLoadedFor;
+    private String editorBaseline;
     private long currentSeed;
     private boolean loading = true;
 
@@ -93,6 +129,7 @@ public final class MainActivity extends Activity {
     public void onCreate(Bundle state) {
         super.onCreate(state);
         prefs = getSharedPreferences(ConfigKeys.PREFS, MODE_PRIVATE);
+        uiPrefs = getSharedPreferences(UI_PREFS, MODE_PRIVATE);
         boolean profileSchemaReset = !prefs.getAll().isEmpty() && !Profile.hasCurrentSchema(prefs);
         if (!Profile.ensureCurrentSchema(prefs)) {
             Toast.makeText(this, "Unable to initialise NetVeil profile storage.", Toast.LENGTH_LONG)
@@ -124,13 +161,21 @@ public final class MainActivity extends Activity {
         });
 
         buildHeader();
-        buildSummaryCard();
+        buildModeSelector();
+
+        basicContainer = ui.vertical();
+        basicContainer.setLayoutParams(ui.matchWrap());
+        root.addView(basicContainer);
+        buildBasicView();
+
+        advancedContainer = ui.vertical();
+        advancedContainer.setLayoutParams(ui.matchWrap());
+        root.addView(advancedContainer);
         buildProfileCard();
 
         profileBody = ui.vertical();
         profileBody.setLayoutParams(ui.matchWrap());
-        root.addView(profileBody);
-
+        advancedContainer.addView(profileBody);
         buildProfileStatusCard();
         buildIdentityCard();
         buildCountryCard();
@@ -142,6 +187,7 @@ public final class MainActivity extends Activity {
         validationSummary.setLayoutParams(ui.blockParams(16));
         profileBody.addView(validationSummary);
 
+        buildSummaryCard();
         buildActionsCard();
 
         watch(dns);
@@ -152,9 +198,18 @@ public final class MainActivity extends Activity {
         hideIpv6.setOnCheckedChangeListener((buttonView, isChecked) -> validateAndPreview());
 
         refreshTargets();
-        selectTarget(ConfigKeys.GLOBAL);
+        selectTargetNow(ConfigKeys.GLOBAL);
+        loadBasicLocal();
+        setMode(0);
+        loading = false;
+
+        modeChoices.setOnCheckedChangeListener((group, checkedId) -> setMode(
+                ui.choiceIndex(modeChoices)));
+
         setContentView(scroll);
         scroll.requestApplyInsets();
+        maybeRefreshBasicDataInBackground();
+
         if (profileSchemaReset) {
             Toast.makeText(this,
                     "Previous profile configuration was cleared for the current NetVeil format.",
@@ -195,26 +250,321 @@ public final class MainActivity extends Activity {
         root.addView(scopeNotice);
     }
 
-    private void buildSummaryCard() {
+    private void buildModeSelector() {
         LinearLayout card = ui.card();
-
-        LinearLayout heading = ui.row();
-        TextView title = ui.sectionTitle("Effective state");
-        heading.addView(title, new LinearLayout.LayoutParams(
-                0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
-        summaryChip = ui.chip("GLOBAL", UiFactory.Tone.INFO);
-        heading.addView(summaryChip);
-        card.addView(heading);
-
-        preview = ui.body("");
-        preview.setTextSize(15);
-        preview.setLineSpacing(0, 1.14f);
-        card.addView(preview);
-
-        card.addView(ui.helper(
-                "This summary reflects the loaded draft or resolved profile; changes are applied "
-                        + "to target app processes after Save and restart."));
+        card.addView(ui.sectionTitle("Configuration"));
+        modeChoices = ui.choiceGroup(MODE_LABELS, false);
+        ui.setChoice(modeChoices, 0);
+        card.addView(modeChoices);
         root.addView(card);
+    }
+
+    private void setMode(int mode) {
+        if (basicContainer == null || advancedContainer == null) return;
+        boolean basic = mode == 0;
+        basicContainer.setVisibility(basic ? View.VISIBLE : View.GONE);
+        advancedContainer.setVisibility(basic ? View.GONE : View.VISIBLE);
+    }
+
+    private void buildBasicView() {
+        LinearLayout card = ui.card();
+        card.addView(ui.sectionTitle("Global setup"));
+        card.addView(ui.helper(
+                "Choose a country, then Apply to save the Global profile. For custom values, use "
+                        + "Advanced and save there."));
+
+        card.addView(ui.label("Country"));
+        basicCountry = ui.spinner(CountryCatalog.labels());
+        String savedCountry = uiPrefs.getString(UI_BASIC_COUNTRY, "");
+        String initialCountry = CountryCatalog.supports(savedCountry)
+                ? savedCountry : CountryCatalog.defaultForLocale(Locale.getDefault());
+        basicCountry.setSelection(Math.max(0, CountryCatalog.indexOf(initialCountry)));
+        card.addView(basicCountry);
+
+        basicDataStatus = ui.status("", UiFactory.Tone.INFO);
+        LinearLayout.LayoutParams dataParams = ui.blockParams(8);
+        dataParams.topMargin = ui.dp(8);
+        basicDataStatus.setLayoutParams(dataParams);
+        card.addView(basicDataStatus);
+
+        basicOverrides = ui.switchControl(
+                "Allow Basic to replace Advanced Global",
+                uiPrefs.getBoolean(UI_BASIC_OVERRIDES, false));
+        card.addView(basicOverrides);
+        card.addView(ui.helper(
+                "Off protects an Advanced-customised Global profile. Replacement still requires an "
+                        + "explicit Apply/Update/Refresh action."));
+
+        basicStateStatus = ui.status("", UiFactory.Tone.NEUTRAL);
+        basicStateStatus.setLayoutParams(ui.blockParams(12));
+        card.addView(basicStateStatus);
+
+        basicApply = ui.button("Apply Global profile", UiFactory.ButtonKind.PRIMARY);
+        basicApply.setLayoutParams(ui.matchWrap());
+        card.addView(basicApply);
+
+        basicRefreshReplace = ui.button("Refresh & replace Global", UiFactory.ButtonKind.TONAL);
+        LinearLayout.LayoutParams refreshParams = ui.matchWrap();
+        refreshParams.topMargin = ui.dp(10);
+        basicRefreshReplace.setLayoutParams(refreshParams);
+        card.addView(basicRefreshReplace);
+
+        basicContainer.addView(card);
+
+        basicCountry.setOnItemSelectedListener(new android.widget.AdapterView.OnItemSelectedListener() {
+            @Override public void onItemSelected(android.widget.AdapterView<?> parent, View view,
+                    int position, long id) {
+                String country = CountryCatalog.codeAt(position);
+                uiPrefs.edit().putString(UI_BASIC_COUNTRY, country).apply();
+                rebuildBasicDraft();
+            }
+
+            @Override public void onNothingSelected(android.widget.AdapterView<?> parent) {}
+        });
+        basicOverrides.setOnCheckedChangeListener((buttonView, checked) -> {
+            uiPrefs.edit().putBoolean(UI_BASIC_OVERRIDES, checked).apply();
+            renderBasicState();
+        });
+        basicApply.setOnClickListener(v -> requestApplyBasic());
+        basicRefreshReplace.setOnClickListener(v -> requestManualBasicRefresh());
+    }
+
+    private void loadBasicLocal() {
+        try {
+            basicLoaded = CountryPackStore.loadBest(this);
+            rebuildBasicDraft();
+        } catch (Exception e) {
+            basicLoaded = null;
+            basicDraft = null;
+            ui.setStatus(basicDataStatus, UiFactory.Tone.ERROR,
+                    "Country data unavailable: " + safeMessage(e));
+            renderBasicState();
+        }
+    }
+
+    private void rebuildBasicDraft() {
+        if (basicLoaded == null || basicCountry == null) return;
+        String country = selectedBasicCountry();
+        long seed = basicSeedForDraft();
+        try {
+            basicDraft = RecommendedProfileFactory.create(country, basicLoaded.pack, seed);
+            int count = basicDraft.profile.identities.size();
+            int dnsCount = basicDraft.profile.dnsSets.size();
+            String data = CountryCatalog.labelFor(country)
+                    + " · " + count + " high-confidence identities · " + dnsCount + " DNS sets"
+                    + "\nData: " + basicLoaded.pack.generatedAt
+                    + " · " + basicLoaded.source.label;
+            CountryPackStore.Outcome outcome = CountryRefreshScheduler.lastOutcome(this);
+            if (outcome == CountryPackStore.Outcome.FAILED) {
+                String error = CountryRefreshScheduler.lastError(this);
+                data += "\nLast refresh failed; valid local data retained"
+                        + (error == null || error.isBlank() ? "" : ": " + error);
+                ui.setStatus(basicDataStatus, UiFactory.Tone.WARNING, data);
+            } else {
+                ui.setStatus(basicDataStatus, UiFactory.Tone.INFO, data);
+            }
+            syncBasicDraftIntoFreshAdvanced();
+        } catch (IllegalArgumentException e) {
+            basicDraft = null;
+            ui.setStatus(basicDataStatus, UiFactory.Tone.ERROR, e.getMessage());
+        }
+        renderBasicState();
+    }
+
+    private long basicSeedForDraft() {
+        if (BasicProfileMetadata.isManaged(prefs)
+                && Profile.hasStoredProfile(prefs, ConfigKeys.GLOBAL)) {
+            Profile stored = Profile.load(prefs, ConfigKeys.GLOBAL);
+            if (stored != null && stored.selectionSeed != 0L) return stored.selectionSeed;
+        }
+        if (basicDraftSeed == 0L) basicDraftSeed = nonZeroRandom();
+        return basicDraftSeed;
+    }
+
+    private void syncBasicDraftIntoFreshAdvanced() {
+        if (basicDraft == null || !ConfigKeys.GLOBAL.equals(selectedTarget)) return;
+        if (Profile.hasStoredProfile(prefs, ConfigKeys.GLOBAL)) return;
+        if (editorBaseline != null && hasUnsavedChanges()) return;
+        loadProfileIntoEditor(basicDraft.profile, false);
+        editorLoadedFor = ConfigKeys.GLOBAL;
+        markEditorClean();
+        validateAndPreview();
+    }
+
+    private BasicProfileState.Kind currentBasicState() {
+        boolean stored = Profile.hasStoredProfile(prefs, ConfigKeys.GLOBAL);
+        Profile profile = stored ? Profile.load(prefs, ConfigKeys.GLOBAL) : null;
+        boolean resolvable = profile != null && profile.resolve() != null;
+        String currentFingerprint = basicDraft == null ? null : basicDraft.fingerprint;
+        return BasicProfileState.classify(
+                stored,
+                resolvable,
+                BasicProfileMetadata.isManaged(prefs),
+                BasicProfileMetadata.fingerprint(prefs),
+                currentFingerprint);
+    }
+
+    private void renderBasicState() {
+        if (basicApply == null || basicRefreshReplace == null) return;
+        boolean draftReady = basicDraft != null;
+        BasicProfileState.Kind state = currentBasicState();
+        String country = basicDraft == null ? selectedBasicCountry() : basicDraft.countryCode;
+        String label = CountryCatalog.labelFor(country);
+        boolean replacementAllowed = state != BasicProfileState.Kind.ADVANCED_CUSTOM
+                || basicOverrides.isChecked();
+
+        switch (state) {
+            case ABSENT -> {
+                ui.setStatus(basicStateStatus, UiFactory.Tone.INFO,
+                        "Recommended Global draft ready · " + label + " · not saved yet");
+                basicApply.setText("Apply Global profile");
+                basicApply.setEnabled(draftReady);
+            }
+            case ACTIVE -> {
+                ui.setStatus(basicStateStatus, UiFactory.Tone.SUCCESS,
+                        "Global profile active · " + CountryCatalog.labelFor(
+                                BasicProfileMetadata.country(prefs)));
+                basicApply.setText("Global profile active");
+                basicApply.setEnabled(false);
+            }
+            case UPDATE_AVAILABLE -> {
+                ui.setStatus(basicStateStatus, UiFactory.Tone.WARNING,
+                        "Recommended update available · " + label);
+                basicApply.setText("Update Global profile");
+                basicApply.setEnabled(draftReady);
+            }
+            case ADVANCED_CUSTOM -> {
+                ui.setStatus(basicStateStatus, UiFactory.Tone.INFO,
+                        basicOverrides.isChecked()
+                                ? "Custom Advanced Global active · explicit Basic replacement allowed"
+                                : "Custom Advanced Global configuration active");
+                basicApply.setText("Replace with recommended " + label);
+                basicApply.setEnabled(draftReady && replacementAllowed);
+            }
+            case INVALID -> {
+                ui.setStatus(basicStateStatus, UiFactory.Tone.WARNING,
+                        "Saved Global profile is incomplete · recommended replacement ready");
+                basicApply.setText("Replace Global profile");
+                basicApply.setEnabled(draftReady);
+            }
+        }
+        basicApply.setAlpha(basicApply.isEnabled() ? 1f : 0.45f);
+        basicRefreshReplace.setEnabled(draftReady && replacementAllowed && !basicRefreshRunning);
+        basicRefreshReplace.setAlpha(basicRefreshReplace.isEnabled() ? 1f : 0.45f);
+    }
+
+    private void requestApplyBasic() {
+        if (basicDraft == null) return;
+        BasicProfileState.Kind state = currentBasicState();
+        if (state == BasicProfileState.Kind.ADVANCED_CUSTOM && !basicOverrides.isChecked()) {
+            ui.setStatus(basicStateStatus, UiFactory.Tone.WARNING,
+                    "Advanced Global is protected. Enable the replacement toggle or edit it in Advanced.");
+            return;
+        }
+        runAfterDiscardIfNeeded(() -> persistBasicDraft(basicDraft, "Global profile saved"));
+    }
+
+    private void persistBasicDraft(RecommendedProfileFactory.Draft draft, String successMessage) {
+        if (draft == null) return;
+        SharedPreferences.Editor editor = prefs.edit();
+        ProfilePersistence.putProfile(editor, ConfigKeys.GLOBAL, draft.profile);
+        BasicProfileMetadata.markBasic(editor, draft);
+        if (!editor.commit()) {
+            toast("Save failed");
+            return;
+        }
+        basicDraftSeed = draft.profile.selectionSeed;
+        loadSelectedTarget();
+        rebuildBasicDraft();
+        toast(successMessage + ". Restart scoped app process(es) to apply.");
+    }
+
+    private void requestManualBasicRefresh() {
+        if (basicRefreshRunning) return;
+        BasicProfileState.Kind state = currentBasicState();
+        if (state == BasicProfileState.Kind.ADVANCED_CUSTOM && !basicOverrides.isChecked()) {
+            ui.setStatus(basicStateStatus, UiFactory.Tone.WARNING,
+                    "Advanced Global is protected. Enable the replacement toggle before replacing it.");
+            return;
+        }
+        runAfterDiscardIfNeeded(() -> startManualBasicRefresh(selectedBasicCountry()));
+    }
+
+    private void startManualBasicRefresh(String country) {
+        if (basicRefreshRunning) return;
+        basicRefreshRunning = true;
+        basicCountry.setEnabled(false);
+        basicApply.setEnabled(false);
+        basicRefreshReplace.setEnabled(false);
+        ui.setStatus(basicDataStatus, UiFactory.Tone.INFO,
+                "Refreshing validated country data…");
+        long seed = basicSeedForDraft();
+        ExecutorService executor = Executors.newSingleThreadExecutor();
+        executor.execute(() -> {
+            CountryPackStore.RefreshResult result = CountryPackStore.refreshBlocking(this);
+            CountryRefreshScheduler.recordRefreshResult(this, result);
+            RecommendedProfileFactory.Draft refreshedDraft = null;
+            String error = result.error;
+            if (result.outcome != CountryPackStore.Outcome.FAILED) {
+                try {
+                    CountryPackStore.Loaded loaded = CountryPackStore.loadBest(this);
+                    refreshedDraft = RecommendedProfileFactory.create(country, loaded.pack, seed);
+                } catch (Exception e) {
+                    error = safeMessage(e);
+                }
+            }
+            RecommendedProfileFactory.Draft finalDraft = refreshedDraft;
+            String finalError = error;
+            if (!isDestroyed()) {
+                runOnUiThread(() -> {
+                    if (isDestroyed()) return;
+                    basicRefreshRunning = false;
+                    basicCountry.setEnabled(true);
+                    loadBasicLocal();
+                    if (result.outcome == CountryPackStore.Outcome.FAILED || finalDraft == null) {
+                        ui.setStatus(basicDataStatus, UiFactory.Tone.WARNING,
+                                "Refresh failed; saved Global was not changed. "
+                                        + (finalError == null ? "" : finalError));
+                        renderBasicState();
+                    } else {
+                        basicDraft = finalDraft;
+                        persistBasicDraft(finalDraft,
+                                result.outcome == CountryPackStore.Outcome.UPDATED
+                                        ? "Country data refreshed and Global replaced"
+                                        : "Country data already current; Global replaced");
+                    }
+                });
+            }
+            executor.shutdown();
+        });
+    }
+
+    private void maybeRefreshBasicDataInBackground() {
+        long lastCheck = CountryRefreshScheduler.lastCheckMillis(this);
+        long now = System.currentTimeMillis();
+        if (basicRefreshRunning || (lastCheck > 0L && now - lastCheck < BASIC_REFRESH_STALE_MILLIS)) {
+            return;
+        }
+        basicRefreshRunning = true;
+        renderBasicState();
+        ExecutorService executor = Executors.newSingleThreadExecutor();
+        executor.execute(() -> {
+            CountryPackStore.RefreshResult result = CountryPackStore.refreshBlocking(this);
+            CountryRefreshScheduler.recordRefreshResult(this, result);
+            if (!isDestroyed()) {
+                runOnUiThread(() -> {
+                    if (isDestroyed()) return;
+                    basicRefreshRunning = false;
+                    loadBasicLocal();
+                    renderBasicState();
+                });
+            }
+            executor.shutdown();
+        });
+    }
+
+    private String selectedBasicCountry() {
+        return CountryCatalog.codeAt(Math.max(0, basicCountry.getSelectedItemPosition()));
     }
 
     private void buildProfileCard() {
@@ -242,13 +592,19 @@ public final class MainActivity extends Activity {
         });
         card.addView(targetField);
         card.addView(ui.helper(
-                "Choose Global, a saved or launchable app, or enter an exact package name manually. "
-                        + "Changing typed target text is write-safe: load it first, review, then Save."));
+                "Choose Global, a saved or launchable app, or enter an exact package name manually."));
 
         Button loadTarget = ui.button("Load selected profile", UiFactory.ButtonKind.TONAL);
         loadTarget.setLayoutParams(ui.matchWrap());
         loadTarget.setOnClickListener(v -> loadTargetFromField());
         card.addView(loadTarget);
+
+        clearProfile = ui.button("Clear selected profile", UiFactory.ButtonKind.ERROR);
+        LinearLayout.LayoutParams clearParams = ui.matchWrap();
+        clearParams.topMargin = ui.dp(10);
+        clearProfile.setLayoutParams(clearParams);
+        clearProfile.setOnClickListener(v -> requestClearSelected());
+        card.addView(clearProfile);
 
         policyContainer = ui.vertical();
         policyContainer.addView(ui.divider());
@@ -263,7 +619,7 @@ public final class MainActivity extends Activity {
             if (!loading) onPolicyChanged();
         });
         card.addView(policyContainer);
-        root.addView(card);
+        advancedContainer.addView(card);
     }
 
     private void buildProfileStatusCard() {
@@ -301,7 +657,7 @@ public final class MainActivity extends Activity {
     private void buildCountryCard() {
         LinearLayout card = ui.card();
         card.addView(ui.sectionTitle("Country IPv4 preset"));
-        CountryPresetPanel countryPresetPanel = new CountryPresetPanel(this, this::applyCountryPreset);
+        countryPresetPanel = new CountryPresetPanel(this, this::applyCountryPreset);
         card.addView(countryPresetPanel.view());
         profileBody.addView(card);
     }
@@ -314,8 +670,21 @@ public final class MainActivity extends Activity {
                 "One set per line; comma-separate servers within a set. Randomisation selects one "
                         + "whole DNS set rather than mixing individual servers."));
 
+        Button populateDns = ui.button("Populate recommended DNS", UiFactory.ButtonKind.TONAL);
+        populateDns.setLayoutParams(ui.matchWrap());
+        populateDns.setOnClickListener(v -> {
+            String country = countryPresetPanel.selectedCountryCode();
+            dns.setText(DnsPresetProvider.format(country));
+            toast("Recommended " + CountryCatalog.labelFor(country)
+                    + " DNS sets added to the draft. Edit as needed, then Save.");
+        });
+        card.addView(populateDns);
+
         dns = ui.input(true);
-        dns.setHint("8.8.8.8, 8.8.4.4\n1.1.1.1, 1.0.0.1");
+        LinearLayout.LayoutParams dnsParams = ui.matchWrap();
+        dnsParams.topMargin = ui.dp(10);
+        dns.setLayoutParams(dnsParams);
+        dns.setHint(DnsPresetProvider.format("AU"));
         card.addView(dns);
 
         dnsStatus = ui.status("", UiFactory.Tone.NEUTRAL);
@@ -328,7 +697,7 @@ public final class MainActivity extends Activity {
 
     private void buildSelectionCard() {
         LinearLayout card = ui.card();
-        card.addView(ui.sectionTitle("Selection"));
+        card.addView(ui.sectionTitle("Randomisation"));
         randomize = ui.switchControl("Randomise identities and DNS sets", false);
         card.addView(randomize);
         card.addView(ui.helper(
@@ -355,6 +724,26 @@ public final class MainActivity extends Activity {
         profileBody.addView(card);
     }
 
+    private void buildSummaryCard() {
+        LinearLayout card = ui.card();
+        LinearLayout heading = ui.row();
+        TextView title = ui.sectionTitle("Effective state");
+        heading.addView(title, new LinearLayout.LayoutParams(
+                0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+        summaryChip = ui.chip("GLOBAL", UiFactory.Tone.INFO);
+        heading.addView(summaryChip);
+        card.addView(heading);
+
+        preview = ui.body("");
+        preview.setTextSize(15);
+        preview.setLineSpacing(0, 1.14f);
+        card.addView(preview);
+        card.addView(ui.helper(
+                "This summary reflects the loaded draft or resolved profile. Save, then restart the "
+                        + "target app process to apply changes."));
+        advancedContainer.addView(card);
+    }
+
     private void buildActionsCard() {
         LinearLayout card = ui.card();
         card.addView(ui.sectionTitle("Apply changes"));
@@ -363,26 +752,15 @@ public final class MainActivity extends Activity {
         save.setLayoutParams(ui.matchWrap());
         card.addView(save);
 
-        LinearLayout secondary = ui.row();
-        LinearLayout.LayoutParams secondaryParams = ui.blockParams(0);
-        secondaryParams.topMargin = ui.dp(12);
-        secondary.setLayoutParams(secondaryParams);
-
         reroll = ui.button("Reroll", UiFactory.ButtonKind.OUTLINE);
-        delete = ui.button("Remove override", UiFactory.ButtonKind.ERROR);
-
-        LinearLayout.LayoutParams left = ui.weightedParams(1f);
-        left.rightMargin = ui.dp(6);
-        LinearLayout.LayoutParams right = ui.weightedParams(1f);
-        right.leftMargin = ui.dp(6);
-        secondary.addView(reroll, left);
-        secondary.addView(delete, right);
-        card.addView(secondary);
+        LinearLayout.LayoutParams rerollParams = ui.matchWrap();
+        rerollParams.topMargin = ui.dp(10);
+        reroll.setLayoutParams(rerollParams);
+        card.addView(reroll);
 
         save.setOnClickListener(v -> saveSelected());
         reroll.setOnClickListener(v -> rerollSelected());
-        delete.setOnClickListener(v -> confirmDeleteSelected());
-        root.addView(card);
+        advancedContainer.addView(card);
     }
 
     private void applyCountryPreset(List<String> ipv4Values, boolean replace) {
@@ -441,12 +819,12 @@ public final class MainActivity extends Activity {
                         label == null ? pkg : label.toString(), "App"));
             }
         } catch (Throwable ignored) {
-            // Saved/manual package names still remain fully usable.
+            // Saved/manual package names remain usable if package enumeration is unavailable.
         }
 
         List<TargetEntry> installedList = new ArrayList<>(installed.values());
         installedList.sort(Comparator.comparing(
-                entry -> entry.label.toLowerCase(java.util.Locale.ROOT)));
+                entry -> entry.label.toLowerCase(Locale.ROOT)));
         targets.clear();
         targets.add(TargetEntry.global());
         targets.addAll(saved.values());
@@ -457,7 +835,7 @@ public final class MainActivity extends Activity {
         targetField.setAdapter(adapter);
         targetField.setOnItemClickListener((parent, view, position, id) -> {
             TargetEntry entry = (TargetEntry) parent.getItemAtPosition(position);
-            selectTarget(entry.target);
+            requestSelectTarget(entry.target);
         });
     }
 
@@ -465,12 +843,12 @@ public final class MainActivity extends Activity {
         String raw = targetField.getText().toString().trim();
         for (TargetEntry entry : targets) {
             if (raw.equals(entry.toString()) || raw.equals(entry.target)) {
-                selectTarget(entry.target);
+                requestSelectTarget(entry.target);
                 return;
             }
         }
         if (isPackageName(raw)) {
-            selectTarget(raw);
+            requestSelectTarget(raw);
             return;
         }
         targetField.setError(
@@ -478,7 +856,11 @@ public final class MainActivity extends Activity {
         targetField.requestFocus();
     }
 
-    private void selectTarget(String target) {
+    private void requestSelectTarget(String target) {
+        runAfterDiscardIfNeeded(() -> selectTargetNow(target));
+    }
+
+    private void selectTargetNow(String target) {
         selectedTarget = target;
         editorLoadedFor = null;
         TargetEntry known = findTarget(target);
@@ -495,12 +877,20 @@ public final class MainActivity extends Activity {
     }
 
     private void loadSelectedTarget() {
+        boolean previousLoading = loading;
         loading = true;
         boolean global = isGlobal();
         policyContainer.setVisibility(global ? View.GONE : View.VISIBLE);
         if (global) {
             profileBody.setVisibility(View.VISIBLE);
-            loadEditor(ConfigKeys.GLOBAL, Profile.hasStoredProfile(prefs, ConfigKeys.GLOBAL));
+            if (Profile.hasStoredProfile(prefs, ConfigKeys.GLOBAL)) {
+                loadEditor(ConfigKeys.GLOBAL, true);
+            } else if (basicDraft != null) {
+                loadProfileIntoEditor(basicDraft.profile, false);
+                editorLoadedFor = ConfigKeys.GLOBAL;
+            } else {
+                loadEditor(ConfigKeys.GLOBAL, false);
+            }
         } else {
             Profile.AppPolicy policy = Profile.appPolicy(prefs, selectedTarget);
             ui.setChoice(policyChoices, policyIndex(policy));
@@ -510,9 +900,10 @@ public final class MainActivity extends Activity {
                 loadEditor(selectedTarget, Profile.hasStoredProfile(prefs, selectedTarget));
             }
         }
-        loading = false;
+        loading = previousLoading;
         updateActionButtons();
         validateAndPreview();
+        markEditorClean();
     }
 
     private void onPolicyChanged() {
@@ -525,6 +916,9 @@ public final class MainActivity extends Activity {
                 loadEditor(selectedTarget, true);
             } else if (Profile.hasStoredProfile(prefs, ConfigKeys.GLOBAL)) {
                 loadProfileIntoEditor(Profile.load(prefs, ConfigKeys.GLOBAL), false);
+                editorLoadedFor = selectedTarget;
+            } else if (basicDraft != null) {
+                loadProfileIntoEditor(basicDraft.profile, false);
                 editorLoadedFor = selectedTarget;
             } else {
                 loadProfileIntoEditor(null, false);
@@ -542,6 +936,7 @@ public final class MainActivity extends Activity {
     }
 
     private void loadProfileIntoEditor(Profile profile, boolean exists) {
+        boolean previousLoading = loading;
         loading = true;
         if (profile == null) {
             enabled.setChecked(true);
@@ -549,19 +944,21 @@ public final class MainActivity extends Activity {
             hideVpn.setChecked(true);
             hideProxy.setChecked(true);
             hideIpv6.setChecked(false);
-            currentSeed = random.nextLong();
+            currentSeed = nonZeroRandom();
             identityEditors.clear();
             identitiesContainer.removeAllViews();
             addIdentityEditor(null);
-            dns.setText("");
+            String country = countryPresetPanel == null
+                    ? selectedBasicCountry() : countryPresetPanel.selectedCountryCode();
+            dns.setText(DnsPresetProvider.format(country));
         } else {
             enabled.setChecked(profile.enabled);
             randomize.setChecked(profile.randomize);
             hideVpn.setChecked(profile.hideVpn);
             hideProxy.setChecked(profile.hideProxy);
             hideIpv6.setChecked(profile.hideIpv6);
-            currentSeed = exists ? profile.selectionSeed : random.nextLong();
-            if (currentSeed == 0L && !exists) currentSeed = random.nextLong();
+            currentSeed = exists ? profile.selectionSeed : profile.selectionSeed;
+            if (currentSeed == 0L) currentSeed = nonZeroRandom();
             identityEditors.clear();
             identitiesContainer.removeAllViews();
             if (profile.identities.isEmpty()) {
@@ -569,9 +966,9 @@ public final class MainActivity extends Activity {
             } else {
                 for (NetworkIdentity identity : profile.identities) addIdentityEditor(identity);
             }
-            dns.setText(formatDnsSets(profile.dnsSets));
+            dns.setText(DnsPresetProvider.formatSets(profile.dnsSets));
         }
-        loading = false;
+        loading = previousLoading;
         refreshIdentityHeadings();
     }
 
@@ -595,6 +992,7 @@ public final class MainActivity extends Activity {
                 refreshTargets();
                 updateActionButtons();
                 updatePreview();
+                markEditorClean();
                 toast("Saved. Restart the target app to apply.");
                 return;
             }
@@ -603,20 +1001,20 @@ public final class MainActivity extends Activity {
         CollectedProfile collected = collectProfile(true);
         if (collected == null) return;
         String target = isGlobal() ? ConfigKeys.GLOBAL : selectedTarget;
-        SharedPreferences.Editor editor = prefs.edit()
-                .putInt(ConfigKeys.SCHEMA_VERSION, ConfigKeys.CURRENT_SCHEMA_VERSION)
-                .putBoolean(ConfigKeys.p(target, ConfigKeys.FIELD_ENABLED), enabled.isChecked())
-                .putBoolean(ConfigKeys.p(target, ConfigKeys.FIELD_RANDOMIZE), randomize.isChecked())
-                .putBoolean(ConfigKeys.p(target, ConfigKeys.FIELD_HIDE_VPN), hideVpn.isChecked())
-                .putBoolean(ConfigKeys.p(target, ConfigKeys.FIELD_HIDE_PROXY), hideProxy.isChecked())
-                .putBoolean(ConfigKeys.p(target, ConfigKeys.FIELD_HIDE_IPV6), hideIpv6.isChecked())
-                .putLong(ConfigKeys.p(target, ConfigKeys.FIELD_SELECTION_SEED), currentSeed)
-                .putString(ConfigKeys.p(target, ConfigKeys.FIELD_IDENTITIES),
-                        NetworkIdentity.serializeList(collected.identities))
-                .putString(ConfigKeys.p(target, ConfigKeys.FIELD_DNS),
-                        formatDnsSets(collected.dnsSets));
+        Profile draft = Profile.create(
+                enabled.isChecked(), randomize.isChecked(), hideVpn.isChecked(),
+                hideProxy.isChecked(), hideIpv6.isChecked(), currentSeed,
+                collected.identities, collected.dnsSets);
+        SharedPreferences.Editor editor = prefs.edit();
+        ProfilePersistence.putProfile(editor, target, draft);
 
-        if (!isGlobal()) {
+        if (isGlobal()) {
+            if (basicDraft != null && sameProfile(draft, basicDraft.profile)) {
+                BasicProfileMetadata.markBasic(editor, basicDraft);
+            } else {
+                BasicProfileMetadata.clear(editor);
+            }
+        } else {
             Set<String> index = mutableIndex();
             index.add(selectedTarget);
             editor.putStringSet(ConfigKeys.INDEX, index)
@@ -631,6 +1029,8 @@ public final class MainActivity extends Activity {
         refreshTargets();
         updateActionButtons();
         updatePreview();
+        markEditorClean();
+        rebuildBasicDraft();
         toast("Saved. Restart scoped app process(es) to apply.");
     }
 
@@ -642,17 +1042,14 @@ public final class MainActivity extends Activity {
                 && (ConfigKeys.GLOBAL.equals(selectedTarget) || isPackageName(selectedTarget))) {
             return true;
         }
-
         for (TargetEntry entry : targets) {
             if (raw.equals(entry.toString()) || raw.equals(entry.target)) {
-                selectTarget(entry.target);
-                toast("Target loaded. Review the profile, then press Save changes again.");
+                requestSelectTarget(entry.target);
                 return false;
             }
         }
         if (isPackageName(raw)) {
-            selectTarget(raw);
-            toast("Target loaded. Review the profile, then press Save changes again.");
+            requestSelectTarget(raw);
             return false;
         }
         targetField.setError(
@@ -677,11 +1074,8 @@ public final class MainActivity extends Activity {
         DnsValidation dnsValidation = validateDns();
         boolean requiresData = enabled.isChecked();
         if (requiresData && identities.isEmpty() && firstInvalid == null) {
-            setValidation(UiFactory.Tone.ERROR,
-                    "Add at least one valid network identity.");
-            if (focusInvalid && !identityEditors.isEmpty()) {
-                identityEditors.get(0).focusIpv4();
-            }
+            setValidation(UiFactory.Tone.ERROR, "Add at least one valid network identity.");
+            if (focusInvalid && !identityEditors.isEmpty()) identityEditors.get(0).focusIpv4();
             return null;
         }
         if (firstInvalid != null) {
@@ -700,8 +1094,7 @@ public final class MainActivity extends Activity {
             return null;
         }
         if (requiresData && dnsValidation.sets.isEmpty()) {
-            setValidation(UiFactory.Tone.ERROR,
-                    "Add at least one valid DNS set.");
+            setValidation(UiFactory.Tone.ERROR, "Add at least one valid DNS set.");
             if (focusInvalid) {
                 dns.requestFocus();
                 scrollTo(dns);
@@ -709,12 +1102,9 @@ public final class MainActivity extends Activity {
             return null;
         }
 
-        if (requiresData) {
-            setValidation(UiFactory.Tone.SUCCESS, "Configuration is coherent.");
-        } else {
-            setValidation(UiFactory.Tone.INFO,
-                    "Profile is disabled; incomplete values may be saved.");
-        }
+        if (requiresData) setValidation(UiFactory.Tone.SUCCESS, "Configuration is coherent.");
+        else setValidation(UiFactory.Tone.INFO,
+                "Profile is disabled; incomplete values may be saved.");
         return new CollectedProfile(identities, dnsValidation.sets);
     }
 
@@ -764,7 +1154,7 @@ public final class MainActivity extends Activity {
             toast("Save this profile first");
             return;
         }
-        currentSeed = random.nextLong();
+        currentSeed = nonZeroRandom();
         if (!prefs.edit()
                 .putLong(ConfigKeys.p(target, ConfigKeys.FIELD_SELECTION_SEED), currentSeed)
                 .commit()) {
@@ -772,51 +1162,95 @@ public final class MainActivity extends Activity {
             return;
         }
         updatePreview();
+        markEditorClean();
+        rebuildBasicDraft();
         toast(isGlobal()
                 ? "Global rerolled. Restart inheriting app processes."
                 : "Rerolled. Restart the target app process(es).");
     }
 
-    private void confirmDeleteSelected() {
-        String title = isGlobal() ? "Reset Global profile?" : "Remove this app override?";
-        String message = isGlobal()
-                ? "This removes the Global configuration. Per-app Custom overrides are retained."
-                : "This removes the saved mode/custom profile so the app returns to the Global default.";
+    private void requestClearSelected() {
+        runAfterDiscardIfNeeded(this::confirmClearSelected);
+    }
+
+    private void confirmClearSelected() {
         new AlertDialog.Builder(this)
-                .setTitle(title)
-                .setMessage(message)
+                .setTitle("Clear " + selectedProfileName() + "?")
                 .setNegativeButton("Cancel", null)
-                .setPositiveButton(isGlobal() ? "Reset" : "Remove",
-                        (dialog, which) -> deleteSelected())
+                .setPositiveButton("Clear", (dialog, which) -> clearSelected())
                 .show();
     }
 
-    private void deleteSelected() {
+    private void clearSelected() {
         String target = isGlobal() ? ConfigKeys.GLOBAL : selectedTarget;
         SharedPreferences.Editor editor = prefs.edit();
-        clearProfileFields(editor, target);
-        if (!isGlobal()) {
+        ProfilePersistence.clearProfile(editor, target);
+        if (isGlobal()) {
+            BasicProfileMetadata.clear(editor);
+        } else {
             editor.remove(ConfigKeys.p(selectedTarget, ConfigKeys.FIELD_POLICY));
             Set<String> index = mutableIndex();
             index.remove(selectedTarget);
             editor.putStringSet(ConfigKeys.INDEX, index);
         }
         if (!editor.commit()) {
-            toast("Delete failed");
+            toast("Clear failed");
             return;
         }
         refreshTargets();
         loadSelectedTarget();
-        toast(isGlobal() ? "Global profile reset" : "Override removed; app now uses Global");
+        rebuildBasicDraft();
+        toast(isGlobal() ? "Global cleared" : "Profile cleared; app now uses Global");
     }
 
-    private static void clearProfileFields(SharedPreferences.Editor editor, String target) {
-        for (String field : new String[]{
-                ConfigKeys.FIELD_ENABLED, ConfigKeys.FIELD_RANDOMIZE, ConfigKeys.FIELD_HIDE_VPN,
-                ConfigKeys.FIELD_HIDE_PROXY, ConfigKeys.FIELD_HIDE_IPV6,
-                ConfigKeys.FIELD_SELECTION_SEED, ConfigKeys.FIELD_IDENTITIES, ConfigKeys.FIELD_DNS}) {
-            editor.remove(ConfigKeys.p(target, field));
+    private String selectedProfileName() {
+        if (isGlobal()) return "Global";
+        TargetEntry entry = findTarget(selectedTarget);
+        return entry == null ? selectedTarget : entry.label;
+    }
+
+    private void runAfterDiscardIfNeeded(Runnable action) {
+        if (!hasUnsavedChanges()) {
+            action.run();
+            return;
         }
+        new AlertDialog.Builder(this)
+                .setTitle("Discard unsaved changes?")
+                .setNegativeButton("Cancel", null)
+                .setPositiveButton("Discard", (dialog, which) -> action.run())
+                .show();
+    }
+
+    private boolean hasUnsavedChanges() {
+        return !loading && editorBaseline != null && !editorBaseline.equals(editorSignature());
+    }
+
+    private void markEditorClean() {
+        editorBaseline = editorSignature();
+    }
+
+    private String editorSignature() {
+        if (targetField == null || policyChoices == null) return "";
+        StringBuilder value = new StringBuilder(selectedTarget);
+        Profile.AppPolicy policy = isGlobal() ? Profile.AppPolicy.CUSTOM : selectedPolicy();
+        value.append('|').append(policy.storedValue);
+        if (!isGlobal() && policy != Profile.AppPolicy.CUSTOM) return value.toString();
+        if (enabled == null || dns == null) return value.toString();
+        value.append('|').append(enabled.isChecked())
+                .append('|').append(randomize.isChecked())
+                .append('|').append(hideVpn.isChecked())
+                .append('|').append(hideProxy.isChecked())
+                .append('|').append(hideIpv6.isChecked())
+                .append('|').append(currentSeed)
+                .append('|').append(dns.getText().toString());
+        for (IdentityEditor editor : identityEditors) {
+            value.append("|id=")
+                    .append(editor.ip.getText()).append(',')
+                    .append(ui.choiceIndex(editor.routeMode)).append(',')
+                    .append(editor.prefix.getText()).append(',')
+                    .append(editor.gateway.getText());
+        }
+        return value.toString();
     }
 
     private void validateAndPreview() {
@@ -870,13 +1304,9 @@ public final class MainActivity extends Activity {
             setSummary(UiFactory.Tone.SUCCESS, "GLOBAL · ENABLED",
                     collected.identities.size() + " network identit"
                             + (collected.identities.size() == 1 ? "y" : "ies")
-                            + "\n"
-                            + collected.dnsSets.size() + " DNS set"
+                            + "\n" + collected.dnsSets.size() + " DNS set"
                             + (collected.dnsSets.size() == 1 ? "" : "s")
-                            + "\nPer-app deterministic selection\n"
-                            + privacyText()
-                            + "\n\nEach scoped package derives its own stable selection from "
-                            + "the Global seed until Reroll.");
+                            + "\nPer-app deterministic selection\n" + privacyText());
             return;
         }
 
@@ -926,13 +1356,12 @@ public final class MainActivity extends Activity {
         reroll.setAlpha(reroll.isEnabled() ? 1f : 0.45f);
         reroll.setText(isGlobal() ? "Reroll Global" : "Reroll");
 
-        delete.setText(isGlobal() ? "Reset Global" : "Remove override");
-        delete.setEnabled(isGlobal()
+        boolean canClear = isGlobal()
                 ? Profile.hasStoredProfile(prefs, ConfigKeys.GLOBAL)
                 : Profile.hasStoredProfile(prefs, selectedTarget)
-                        || prefs.contains(ConfigKeys.p(
-                                selectedTarget, ConfigKeys.FIELD_POLICY)));
-        delete.setAlpha(delete.isEnabled() ? 1f : 0.45f);
+                        || prefs.contains(ConfigKeys.p(selectedTarget, ConfigKeys.FIELD_POLICY));
+        clearProfile.setEnabled(canClear);
+        clearProfile.setAlpha(canClear ? 1f : 0.45f);
     }
 
     private void addIdentityEditor(NetworkIdentity identity) {
@@ -997,12 +1426,6 @@ public final class MainActivity extends Activity {
         return value != null && value.matches("[A-Za-z0-9_]+(\\.[A-Za-z0-9_]+)+");
     }
 
-    private static String formatDnsSets(List<List<String>> sets) {
-        List<String> lines = new ArrayList<>();
-        for (List<String> set : sets) lines.add(String.join(", ", set));
-        return String.join("\n", lines);
-    }
-
     private void watch(EditText field) {
         field.addTextChangedListener(new TextWatcher() {
             @Override public void beforeTextChanged(
@@ -1024,6 +1447,31 @@ public final class MainActivity extends Activity {
             scroll.offsetDescendantRectToMyCoords(view, rect);
             scroll.smoothScrollTo(0, Math.max(0, rect.top - ui.dp(24)));
         });
+    }
+
+    private long nonZeroRandom() {
+        long value;
+        do value = random.nextLong(); while (value == 0L);
+        return value;
+    }
+
+    private static boolean sameProfile(Profile left, Profile right) {
+        return left != null && right != null
+                && left.enabled == right.enabled
+                && left.randomize == right.randomize
+                && left.hideVpn == right.hideVpn
+                && left.hideProxy == right.hideProxy
+                && left.hideIpv6 == right.hideIpv6
+                && left.selectionSeed == right.selectionSeed
+                && NetworkIdentity.serializeList(left.identities)
+                        .equals(NetworkIdentity.serializeList(right.identities))
+                && DnsPresetProvider.formatSets(left.dnsSets)
+                        .equals(DnsPresetProvider.formatSets(right.dnsSets));
+    }
+
+    private static String safeMessage(Exception e) {
+        String message = e.getMessage();
+        return message == null || message.isBlank() ? e.getClass().getSimpleName() : message;
     }
 
     private void toast(String value) {

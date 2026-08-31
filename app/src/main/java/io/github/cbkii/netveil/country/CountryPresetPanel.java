@@ -161,6 +161,11 @@ public final class CountryPresetPanel {
         return root;
     }
 
+    /** Current Advanced country selection, used by other draft-population controls such as DNS. */
+    public String selectedCountryCode() {
+        return selectedCountry();
+    }
+
     private void loadLocal() {
         try {
             loaded = CountryPackStore.loadBest(activity);

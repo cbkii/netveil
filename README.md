@@ -34,13 +34,39 @@ For exact hook coverage and limitations, see [Advanced documentation](README_ADV
 
 1. Install a NetVeil release APK.
 2. Enable NetVeil in Vector/LSPosed and scope the intended apps.
-3. Open NetVeil and configure **All scoped apps (Global)**.
-4. Add at least one network identity and one DNS set.
-5. Leave **Omit gateway & routes** selected for ordinary arbitrary IPv4 identities.
-6. Save.
-7. Force-stop and reopen affected target apps.
+3. Open NetVeil. **Basic** setup is shown by default.
+4. Choose a country. NetVeil prepares a recommended Global draft from high-confidence country IPv4 candidates and bundled DNS sets.
+5. Press **Apply Global profile**. The generated draft is not active until explicitly saved/applied.
+6. Force-stop and reopen affected target apps.
 
 A normal profile edit does not require a phone reboot.
+
+### Basic mode
+
+Basic keeps the common path deliberately small: choose a country and explicitly Apply/Update the one Global profile.
+
+The generated recommendation uses:
+
+- high-confidence country candidates with known VPN/proxy/Tor candidates excluded;
+- **Omit gateway & routes** identities;
+- stable per-package random selection;
+- app-visible VPN and proxy indicators hidden;
+- IPv6 addresses suppressed on covered surfaces;
+- a small bundled set of documented public DNS resolver pairs.
+
+The country selector only changes the draft. It never saves by itself. **Refresh & replace Global** explicitly checks the current validated country dataset and replaces Global only after a complete new profile has been built successfully; refresh failure leaves the saved profile unchanged.
+
+If Global has been customised through Advanced, Basic protects it by default. **Allow Basic to replace Advanced Global** must be enabled before an explicit Basic Apply/Update/Refresh action may replace that Advanced-owned Global profile. The toggle itself never writes the profile.
+
+### Advanced mode
+
+Advanced edits the same real Global profile and exposes the full controls: target/per-app mode, identities, route mode, country candidate add/replace, DNS, randomisation and privacy switches.
+
+**Populate recommended DNS** replaces the DNS draft with the selected country's bundled resolver sets; edit or remove lines as desired before pressing **Save changes**.
+
+**Clear selected profile** is directly below **Load selected profile**. Clearing Global removes Global but retains separate per-app Custom profiles. Clearing a saved per-app profile/policy returns that app to ordinary Global inheritance.
+
+Unsaved Advanced edits are protected before operations that would discard them.
 
 ### Per-app modes
 
@@ -71,7 +97,7 @@ The gateway must differ from the client IPv4 and be inside the configured prefix
 
 ### DNS and randomisation
 
-Enter one selectable DNS set per line, comma-separating multiple servers in one set:
+Advanced DNS uses one selectable DNS set per line, comma-separating multiple servers in one set:
 
 ```text
 1.1.1.1, 1.0.0.1
@@ -80,11 +106,11 @@ Enter one selectable DNS set per line, comma-separating multiple servers in one 
 
 Randomisation always selects a whole network identity and a whole DNS set. A package keeps the same selection until the applicable profile is rerolled and the package process is restarted.
 
-## Country IPv4 presets
+## Country IPv4 presets and refresh
 
-Country presets populate the same normal route-hidden identity list. **Add to list** preserves existing identities; **Replace list** replaces only that draft identity list. Saved profiles are changed only when the user presses Save.
+Advanced country presets populate the same ordinary route-hidden identity list. **Add to list** preserves existing identities; **Replace list** replaces only that draft identity list. Saved profiles are changed only when the user presses Save.
 
-The canonical data file is owned by this repository and is both bundled in the APK and anonymously served from public `main`. Manual or scheduled refresh validates online data before replacing the app-private cache. Automatic refresh is off by default.
+The canonical data file is owned by this repository and is both bundled in the APK and anonymously served from public `main`. Manual or scheduled refresh validates online data before replacing the app-private cache. Background refresh can update the recommendation available to Basic but never silently rewrites a saved Global profile.
 
 See [Country data](docs/COUNTRY-DATA.md) for provenance, filtering and update rules.
 

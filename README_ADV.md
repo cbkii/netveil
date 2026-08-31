@@ -17,6 +17,49 @@ This document describes the current implementation. The end-user starting point 
 
 Vector/LSPosed Manager remains the authority for module scope. NetVeil does not use API-102 hot reload at present; adopting that lifecycle is a separate engineering change.
 
+## Configuration surfaces
+
+The configuration app defaults to **Basic** and retains **Advanced** as the complete editor. They do not create layered or parallel runtime profiles: both ultimately operate on the single ordinary Global profile consumed by runtime resolution.
+
+### Basic
+
+Basic generates a complete Global draft from:
+
+- the selected supported country;
+- high-confidence, non-anonymous candidates from the best valid country pack;
+- route-hidden `NetworkIdentity` entries;
+- a small bundled country-ordered DNS preset list;
+- randomisation enabled;
+- VPN/proxy hiding enabled;
+- IPv6 suppression enabled;
+- one non-zero selection seed.
+
+Opening Basic or changing Country never saves that draft. **Apply Global profile** or **Update Global profile** is the explicit persistence boundary.
+
+Small UI metadata records whether the saved Global profile is still Basic-managed and the recommendation fingerprint/country used to generate it. Runtime resolution ignores this metadata. If Advanced saves a materially different Global profile, Basic classifies it as Advanced-owned and protects it by default.
+
+**Allow Basic to replace Advanced Global** is only a write-permission toggle. With it off, explicit Basic replacement actions cannot overwrite an Advanced-owned Global profile. With it on, the next explicit Basic Apply/Update/Refresh action may replace the one Global profile. Changing the toggle itself never changes runtime configuration.
+
+### Basic country refresh
+
+Basic immediately uses `CountryPackStore.loadBest()` and is therefore usable with bundled or previously validated cached data without waiting for the network.
+
+A stale-data background check may refresh the cache/recommendation, but never writes the saved Global profile. **Refresh & replace Global** is deliberately different: it performs an explicit online refresh, builds and validates the complete replacement profile, and only then commits the new Global profile and Basic metadata. A failed refresh/generation/save leaves the previous Global profile intact.
+
+### Bundled DNS presets
+
+`DnsPresetProvider` is the single compact source used by Basic and the Advanced **Populate recommended DNS** action. It contains documented public IPv4 resolver pairs from Cloudflare, Quad9 and Google, ordered per supported country. It does not perform DNS discovery or claim that undocumented ISP resolvers are preferable.
+
+Advanced population replaces only the visible DNS draft and does not save it. Each line remains one complete selectable DNS set.
+
+### Advanced
+
+Advanced retains target selection, Global/Custom/Off policy, enabled state, arbitrary route-hidden or explicit identities, country add/replace controls, raw DNS editing, randomisation, privacy controls, effective-state preview and reroll.
+
+**Clear selected profile** sits directly below **Load selected profile**. The confirmation title is `Clear <Profile name>?`. Global clear removes Global/Basic ownership metadata while retaining per-app Custom profiles; per-app clear removes that package's stored profile/policy and returns it to ordinary Global inheritance.
+
+The editor tracks a clean baseline and prompts before operations that would discard meaningful unsaved Advanced edits.
+
 ## Process and profile resolution
 
 Only an already-scoped app process can execute NetVeil. `system_server` is rejected, and one first package claims one immutable effective profile for the process lifetime.
@@ -110,7 +153,7 @@ app/src/main/assets/country-ip-pack.json
 
 It is bundled into the APK and served anonymously from this repository's public `main` branch. Manual and scheduled refreshes run the same bounded HTTPS fetch/validate/classify/cache-replace path and are serialised process-wide to prevent cache races.
 
-The app distinguishes bundled data, online cache provenance and online refresh outcome. Country data never rewrites a saved profile automatically.
+The app distinguishes bundled data, online cache provenance and online refresh outcome. Country data never rewrites a saved profile automatically; only the explicit Basic refresh-and-replace action can deliberately combine refresh with a subsequent validated Global replacement.
 
 See [docs/COUNTRY-DATA.md](docs/COUNTRY-DATA.md).
 
