@@ -1,0 +1,99 @@
+package io.github.cbkii.netveil.config;
+
+import org.junit.Test;
+
+import java.util.List;
+
+import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertNotEquals;
+import static org.junit.Assert.assertNull;
+import static org.junit.Assert.assertTrue;
+
+public class NetworkIdentityTest {
+    @Test
+    public void hiddenIdentityNeedsOnlyIpv4() {
+        NetworkIdentity.Validation validation = NetworkIdentity.validate(
+                "202.128.115.2", NetworkIdentity.RouteMode.HIDDEN, "", "");
+        assertTrue(validation.valid);
+        assertEquals("202.128.115.2", validation.identity.ipv4);
+        assertEquals(NetworkIdentity.RouteMode.HIDDEN, validation.identity.routeMode);
+        assertEquals(32, validation.identity.prefixLength);
+        assertNull(validation.identity.gateway);
+    }
+
+    @Test
+    public void explicitGatewayMustDifferAndShareSubnet() {
+        assertFalse(NetworkIdentity.validate("192.168.1.2", NetworkIdentity.RouteMode.EXPLICIT,
+                "24", "192.168.1.2").valid);
+        assertFalse(NetworkIdentity.validate("192.168.1.2", NetworkIdentity.RouteMode.EXPLICIT,
+                "24", "192.168.2.1").valid);
+        assertTrue(NetworkIdentity.validate("192.168.1.2", NetworkIdentity.RouteMode.EXPLICIT,
+                "24", "192.168.1.1").valid);
+    }
+
+    @Test
+    public void slashZeroIsLegalButWarned() {
+        NetworkIdentity.Validation validation = NetworkIdentity.validate(
+                "1.129.22.61", NetworkIdentity.RouteMode.EXPLICIT, "0", "192.168.1.1");
+        assertTrue(validation.valid);
+        assertTrue(validation.warning.contains("entire IPv4 address space"));
+    }
+
+    @Test
+    public void slash31CanUsePeerWhileSlash32CannotUseDifferentGateway() {
+        assertTrue(NetworkIdentity.validate("10.0.0.0", NetworkIdentity.RouteMode.EXPLICIT,
+                "31", "10.0.0.1").valid);
+        assertFalse(NetworkIdentity.validate("10.0.0.1", NetworkIdentity.RouteMode.EXPLICIT,
+                "32", "10.0.0.2").valid);
+    }
+
+    @Test
+    public void storedRoundTripPreservesRouteMode() {
+        List<NetworkIdentity> values = List.of(
+                NetworkIdentity.hidden("202.128.115.2"),
+                NetworkIdentity.explicit("192.168.1.20", 24, "192.168.1.1"));
+        List<NetworkIdentity> parsed = NetworkIdentity.parseStoredList(
+                NetworkIdentity.serializeList(values));
+        assertEquals(2, parsed.size());
+        assertEquals(NetworkIdentity.RouteMode.HIDDEN, parsed.get(0).routeMode);
+        assertEquals("192.168.1.1", parsed.get(1).gateway);
+    }
+
+    @Test
+    public void migrationOnlyPairsUnambiguousGateways() {
+        List<NetworkIdentity> migrated = NetworkIdentity.migrateLegacy(
+                List.of("192.168.1.20", "10.0.0.20"),
+                List.of("192.168.1.1", "10.0.0.1", "10.0.0.254"), 24);
+        assertEquals(NetworkIdentity.RouteMode.EXPLICIT, migrated.get(0).routeMode);
+        assertEquals(NetworkIdentity.RouteMode.HIDDEN, migrated.get(1).routeMode);
+    }
+
+    @Test
+    public void multiValueLegacySlashZeroMigratesEntirelyHidden() {
+        List<NetworkIdentity> migrated = NetworkIdentity.migrateLegacy(
+                List.of("202.128.115.2", "1.129.22.61"),
+                List.of("192.168.1.1", "202.128.115.2"), 0);
+        assertEquals(2, migrated.size());
+        assertEquals(NetworkIdentity.RouteMode.HIDDEN, migrated.get(0).routeMode);
+        assertEquals(NetworkIdentity.RouteMode.HIDDEN, migrated.get(1).routeMode);
+        assertNull(migrated.get(0).gateway);
+        assertNull(migrated.get(1).gateway);
+    }
+
+    @Test
+    public void singlePairLegacySlashZeroMayRemainExplicit() {
+        List<NetworkIdentity> migrated = NetworkIdentity.migrateLegacy(
+                List.of("1.129.22.61"), List.of("192.168.1.1"), 0);
+        assertEquals(1, migrated.size());
+        assertEquals(NetworkIdentity.RouteMode.EXPLICIT, migrated.get(0).routeMode);
+        assertEquals("192.168.1.1", migrated.get(0).gateway);
+    }
+
+    @Test
+    public void canonicalIdentitySerializationIsStable() {
+        NetworkIdentity value = NetworkIdentity.hidden("010.000.000.002");
+        assertEquals("H|10.0.0.2", value.serialize());
+        assertNotEquals("H|010.000.000.002", value.serialize());
+    }
+}

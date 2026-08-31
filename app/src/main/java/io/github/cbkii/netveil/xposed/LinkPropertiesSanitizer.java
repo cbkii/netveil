@@ -49,7 +49,8 @@ final class LinkPropertiesSanitizer {
 
         LinkProperties out = new LinkProperties();
         origin.callByName(out, "setInterfaceName", profile.presentationName());
-        origin.callByName(out, "addLinkAddress", factory.linkAddress(profile.ipv4, profile.source.prefixLength));
+        origin.callByName(out, "addLinkAddress",
+                factory.linkAddress(profile.ipv4, profile.source.prefixLength));
 
         if (!profile.source.hideIpv6) preserveIpv6Addresses(original, out);
 
@@ -67,7 +68,7 @@ final class LinkPropertiesSanitizer {
         Object mtu = origin.callOptionalByName(original, "getMtu");
         if (mtu instanceof Integer && (Integer) mtu > 0) origin.callOptionalByName(out, "setMtu", mtu);
 
-        addVirtualIpv4Routes(out);
+        if (profile.source.hasExplicitRoute()) addVirtualIpv4Routes(out);
         if (!profile.source.hideIpv6) preserveIpv6Routes(original, out);
         preserveSafeStackedLinks(original, out, depth);
 

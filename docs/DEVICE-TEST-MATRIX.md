@@ -4,21 +4,38 @@ Use this checklist as the hands-on execution sheet for the authoritative stable-
 
 ## Baseline state
 
-- [ ] Confirm NetVeil is enabled only for the intended target package.
+- [ ] Confirm NetVeil framework scope contains only the intended target applications.
+- [ ] Confirm the NetVeil app opens on **All scoped apps (Global)** by default.
+- [ ] Confirm the target selector shows Global, saved/custom entries, and launchable installed apps without `QUERY_ALL_PACKAGES`.
+- [ ] Confirm manual package entry remains usable for packages not shown by launcher visibility.
 - [ ] Confirm overlapping network spoofing from other scoped modules is disabled for the initial baseline.
 - [ ] Record Android build fingerprint/security patch.
 - [ ] Record Vector/LSPosed version and libxposed API compatibility.
 - [ ] Record actual interface inventory before testing.
 - [ ] Record NetVeil source SHA and APK SHA-256.
 
-## Fixed profile
+## Global and per-app resolution
 
-Configure one IPv4, gateway and DNS set.
+Create a valid Global profile, then exercise at least two scoped target packages.
 
+- [ ] An app with no saved override resolves Global.
+- [ ] `INHERIT_GLOBAL` resolves Global.
+- [ ] `CUSTOM` resolves the package-specific profile instead of Global.
+- [ ] `DISABLED` installs no NetVeil profile hooks for that package even though it remains in Vector/LSPosed scope.
+- [ ] Removing a package override returns it to Global inheritance.
+- [ ] Disabling/resetting Global does not overwrite retained Custom profiles.
+- [ ] A package outside Vector/LSPosed scope is unaffected regardless of Global configuration.
+- [ ] a later package loaded into an already-claimed process cannot install a second profile.
+
+## Route-hidden identity — default
+
+Configure one route-hidden IPv4 and one DNS set. Do **not** enter a prefix/gateway.
+
+- [ ] UI saves successfully without the old `/0` workaround.
 - [ ] `WifiInfo` getter/string/Parcel views agree on the configured IPv4 when applicable.
-- [ ] `DhcpInfo` reports configured IPv4/gateway/DNS and derived mask; DHCP server remains unknown.
-- [ ] `LinkProperties` getter/string/Parcel views agree on configured IPv4/DNS/routes/interface/proxy state.
-- [ ] route objects expose the virtual subnet/default gateway coherently.
+- [ ] `DhcpInfo` reports the configured IPv4/DNS and neutral fixed-width gateway/host-mask metadata rather than inventing a LAN gateway.
+- [ ] `LinkProperties` getter/string/Parcel views expose the configured IPv4/DNS/interface/proxy state.
+- [ ] projected `LinkProperties` contain no synthetic IPv4 connected route or default gateway route.
 - [ ] selected presentation `NetworkInterface` reports virtual IPv4.
 - [ ] lookup by the fake IPv4 returns the selected presentation interface.
 - [ ] loopback remains loopback.
@@ -26,16 +43,43 @@ Configure one IPv4, gateway and DNS set.
 - [ ] classic/NIO local IPv4 socket getters report the virtual IPv4.
 - [ ] IPv6 sockets retain an IPv6 address family.
 
+## Explicit virtual network
+
+Configure a coherent LAN identity such as `192.168.50.20/24` via `192.168.50.1`.
+
+- [ ] UI accepts a different same-subnet gateway.
+- [ ] UI rejects gateway == client IPv4.
+- [ ] UI rejects an out-of-subnet gateway with an actionable inline error.
+- [ ] `/0` remains technically accepted but displays the explicit whole-IPv4-space warning.
+- [ ] `/31` peer addressing behaves according to the configured prefix model.
+- [ ] `/32` does not accept a different gateway as same-subnet.
+- [ ] `DhcpInfo` reports configured IPv4/gateway/DNS and derived mask; DHCP server remains unknown.
+- [ ] `LinkProperties` exposes the configured connected/default IPv4 routes coherently.
+- [ ] synthetic `RouteInfo` objects agree with getter/string/Parcel projections.
+
 ## Stable randomisation
 
-Configure at least three IPv4s, compatible gateways and three DNS sets.
+Configure at least three complete NetworkIdentity entries and three DNS sets in Global.
 
-- [ ] all processes of the target app report the same selected profile.
-- [ ] restarting a process without rerolling keeps the same profile.
-- [ ] Reroll changes only to values present in the configured whitelists.
-- [ ] selected gateway remains in the configured subnet and differs from the client address.
-- [ ] every target-app process is restarted after reroll.
-- [ ] a later package loaded into an already-claimed process cannot install a second profile.
+- [ ] all processes of one target package report the same selected identity/DNS set.
+- [ ] restarting a process without rerolling keeps the same selection.
+- [ ] two different inheriting packages derive independent package seeds from the same Global base seed.
+- [ ] selections contain only configured whole identities and whole DNS sets.
+- [ ] Global Reroll changes the base seed and changes only to configured values after inheriting processes are restarted.
+- [ ] a Custom package profile keeps its own seed and is unaffected by Global Reroll.
+- [ ] Custom Reroll affects only that package profile.
+
+## Legacy-profile migration
+
+Use a preference snapshot/profile from the pre-Global v1.0.x format.
+
+- [ ] Existing package profile defaults to `CUSTOM`, preserving its prior precedence.
+- [ ] An IPv4 with exactly one compatible legacy gateway migrates to an Explicit identity.
+- [ ] An IPv4 with no compatible gateway migrates to route-hidden rather than being rejected.
+- [ ] An IPv4 with multiple compatible legacy gateways migrates to route-hidden rather than guessing.
+- [ ] The previously observed `/0` workaround with ambiguous gateways loads as route-hidden identities.
+- [ ] Saving the migrated profile writes the structured identity format.
+- [ ] legacy fields remain available until explicit reset/remove for rollback/debug inspection.
 
 ## VPN hiding
 
@@ -78,6 +122,17 @@ Test once without a VPN and once with the normal VPN active.
 - [ ] with suppression disabled, IPv6 passthrough does not break IPv4 spoofing.
 - [ ] IPv6 socket local-address getters never return a fabricated IPv4 socket identity.
 
+## Configuration UX
+
+- [ ] Global is first/default selector entry.
+- [ ] saved/manual custom packages remain selectable after app restart.
+- [ ] launchable installed apps display human-readable labels and package names.
+- [ ] editing selector text to a different package cannot accidentally save current Global/custom form data under the wrong target.
+- [ ] inline errors persist long enough to diagnose; configuration problems are not Toast-only.
+- [ ] Save scrolls/focuses the first invalid identity/DNS control.
+- [ ] resolved preview agrees with the effective Global/Custom/Disabled policy.
+- [ ] Android 15/16 edge-to-edge, gesture navigation, three-button navigation, landscape and large display/font scaling remain usable.
+
 ## Multi-module coexistence
 
 - [ ] establish NetVeil-only baseline.
@@ -95,7 +150,7 @@ Test once without a VPN and once with the normal VPN active.
 
 ## Expected native/server disclosures
 
-These remain outside the v1 Java backend and are expected to expose real state where the platform permits them:
+These remain outside the Java backend and are expected to expose real state where the platform permits them:
 
 - [ ] native `getifaddrs()`;
 - [ ] raw netlink/ioctl interface or route queries;

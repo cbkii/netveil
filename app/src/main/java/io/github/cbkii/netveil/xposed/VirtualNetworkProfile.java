@@ -33,9 +33,10 @@ final class VirtualNetworkProfile {
     VirtualNetworkProfile(Profile.Resolved source) {
         this.source = source;
         this.ipv4 = Ipv4.parse(source.ipv4);
-        this.gateway = Ipv4.parse(source.gateway);
+        this.gateway = source.gateway == null ? null : Ipv4.parse(source.gateway);
         this.network = Ipv4.parse(Ipv4.networkAddress(source.ipv4, source.prefixLength));
-        this.broadcast = Ipv4.parse(Ipv4.broadcastAddress(source.ipv4, source.prefixLength));
+        this.broadcast = source.hasExplicitRoute()
+                ? Ipv4.parse(Ipv4.broadcastAddress(source.ipv4, source.prefixLength)) : null;
         this.netmask = Ipv4.netmask(source.prefixLength);
 
         List<InetAddress> dnsValues = new ArrayList<>();

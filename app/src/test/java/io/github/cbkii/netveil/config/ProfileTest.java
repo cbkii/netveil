@@ -6,6 +6,7 @@ import java.util.List;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertNotEquals;
 import static org.junit.Assert.assertTrue;
 
 public class ProfileTest {
@@ -33,6 +34,48 @@ public class ProfileTest {
     }
 
     @Test
+    public void globalPackageSeedIsStableAndPackageSpecific() {
+        long a1 = Profile.derivePackageSeed(77L, "org.schabi.newpipe");
+        long a2 = Profile.derivePackageSeed(77L, "org.schabi.newpipe");
+        long b = Profile.derivePackageSeed(77L, "org.mozilla.firefox");
+        assertEquals(a1, a2);
+        assertNotEquals(a1, b);
+    }
+
+    @Test
+    public void inheritedRandomisationIsStablePerPackage() {
+        Profile global = Profile.create(true, true, true, true, false, 1234L,
+                List.of(
+                        NetworkIdentity.hidden("10.0.0.2"),
+                        NetworkIdentity.hidden("10.0.0.3"),
+                        NetworkIdentity.hidden("10.0.0.4"),
+                        NetworkIdentity.hidden("10.0.0.5")),
+                List.of(List.of("1.1.1.1"), List.of("8.8.8.8")));
+        Profile.Resolved first = global.resolveForInheritedPackage("org.schabi.newpipe");
+        Profile.Resolved repeat = global.resolveForInheritedPackage("org.schabi.newpipe");
+        assertEquals(first.ipv4, repeat.ipv4);
+        assertEquals(first.dns, repeat.dns);
+        assertEquals(first.selectionSeed, repeat.selectionSeed);
+    }
+
+    @Test
+    public void rerollBaseSeedChangesDerivedSeed() {
+        long first = Profile.derivePackageSeed(100L, "org.schabi.newpipe");
+        long second = Profile.derivePackageSeed(101L, "org.schabi.newpipe");
+        assertNotEquals(first, second);
+    }
+
+    @Test
+    public void routeHiddenProfileResolvesWithoutGateway() {
+        Profile profile = Profile.create(true, false, true, true, false, 1L,
+                List.of(NetworkIdentity.hidden("202.128.115.2")),
+                List.of(List.of("1.1.1.1")));
+        Profile.Resolved resolved = profile.resolve();
+        assertEquals(NetworkIdentity.RouteMode.HIDDEN, resolved.routeMode);
+        assertFalse(resolved.hasExplicitRoute());
+    }
+
+    @Test
     public void gatewayCompatibilityUsesNumericIdentity() {
         assertTrue(Profile.hasCompatibleGateway(
                 List.of("192.168.050.020"), List.of("192.168.50.1"), 24));
@@ -43,7 +86,7 @@ public class ProfileTest {
     }
 
     @Test
-    public void everyWhitelistedIpMustHaveACompatibleGateway() {
+    public void everyWhitelistedIpMustHaveACompatibleGatewayLegacyHelper() {
         assertTrue(Profile.allIpsHaveCompatibleGateway(
                 List.of("192.168.50.20", "10.0.0.20"),
                 List.of("192.168.50.1", "10.0.0.1"), 24));

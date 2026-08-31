@@ -40,10 +40,10 @@ public final class NetVeilModule extends XposedModule {
         LegacyNetworkInfoHooks legacyHooks = null;
         try {
             SharedPreferences prefs = getRemotePreferences(ConfigKeys.PREFS);
-            Profile.Resolved profile = Profile.load(prefs, pkg).resolve();
+            Profile.Resolved profile = Profile.resolveEffective(prefs, pkg);
             if (profile == null) {
                 log(Log.INFO, TAG, "inactive package=" + pkg + " process=" + processName
-                        + " reason=no-resolvable-profile");
+                        + " reason=no-effective-profile");
                 return;
             }
 
