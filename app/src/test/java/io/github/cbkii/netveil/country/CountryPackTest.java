@@ -94,6 +94,41 @@ public final class CountryPackTest {
         assertFalse(older.isAtLeastAsNewAs(newer));
     }
 
+    @Test
+    public void identicalVersionAndCandidatesAreUnchanged() throws Exception {
+        CountryPack current = CountryPack.parse(samplePack());
+        CountryPack remote = CountryPack.parse(samplePack());
+        assertEquals(CountryPack.UpdateDisposition.UNCHANGED,
+                CountryPack.classifyUpdate(current, remote));
+    }
+
+    @Test
+    public void newerGeneratedVersionIsUpdated() throws Exception {
+        CountryPack current = CountryPack.parse(samplePack().replace(
+                "2026-08-31T00:00:00Z", "2026-08-30T00:00:00Z"));
+        CountryPack remote = CountryPack.parse(samplePack());
+        assertEquals(CountryPack.UpdateDisposition.UPDATED,
+                CountryPack.classifyUpdate(current, remote));
+    }
+
+    @Test
+    public void olderGeneratedVersionIsRejectedByPolicy() throws Exception {
+        CountryPack current = CountryPack.parse(samplePack());
+        CountryPack remote = CountryPack.parse(samplePack().replace(
+                "2026-08-31T00:00:00Z", "2026-08-30T00:00:00Z"));
+        assertEquals(CountryPack.UpdateDisposition.OLDER,
+                CountryPack.classifyUpdate(current, remote));
+    }
+
+    @Test
+    public void sameTimestampDifferentCandidatesIsConflict() throws Exception {
+        CountryPack current = CountryPack.parse(samplePack());
+        CountryPack remote = CountryPack.parse(samplePack().replaceFirst(
+                "8\\.8\\.8\\.8", "8.8.8.9"));
+        assertEquals(CountryPack.UpdateDisposition.SAME_VERSION_CONFLICT,
+                CountryPack.classifyUpdate(current, remote));
+    }
+
     private static String samplePack() {
         String au = countryRows(1, false);
         String us = countryRows(-1, true);
