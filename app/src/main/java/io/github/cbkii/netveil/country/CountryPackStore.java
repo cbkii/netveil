@@ -65,10 +65,10 @@ public final class CountryPackStore {
         Path cache = context.getFilesDir().toPath().resolve(CACHE_NAME);
         Path temp = context.getFilesDir().toPath().resolve(CACHE_NAME + ".tmp");
         Loaded currentLoaded = null;
-        long checkedAtMillis = 0L;
+        boolean networkAttempted = false;
         try {
             currentLoaded = loadBest(context);
-            checkedAtMillis = System.currentTimeMillis();
+            networkAttempted = true;
             byte[] bytes = fetchHttps(UPDATE_URL);
             String text = new String(bytes, StandardCharsets.UTF_8);
             CountryPack remote = CountryPack.parse(text);
@@ -81,7 +81,7 @@ public final class CountryPackStore {
                         "downloaded country pack changed without advancing generated_at");
                 case UNCHANGED -> {
                     Files.deleteIfExists(temp);
-                    return RefreshResult.unchanged(remote.generatedAt, checkedAtMillis,
+                    return RefreshResult.unchanged(remote.generatedAt, System.currentTimeMillis(),
                             currentLoaded.source);
                 }
                 case UPDATED -> {
@@ -92,13 +92,15 @@ public final class CountryPackStore {
                     } catch (AtomicMoveNotSupportedException e) {
                         throw new IOException("atomic country-pack cache replacement is unavailable", e);
                     }
-                    return RefreshResult.updated(remote.generatedAt, checkedAtMillis);
+                    return RefreshResult.updated(remote.generatedAt, System.currentTimeMillis());
                 }
             }
             throw new IOException("unhandled country-pack update state");
         } catch (Exception e) {
             try { Files.deleteIfExists(temp); } catch (IOException ignored) {}
-            return RefreshResult.failure(checkedAtMillis, currentLoaded == null ? null : currentLoaded.source,
+            long checkedAtMillis = networkAttempted ? System.currentTimeMillis() : 0L;
+            return RefreshResult.failure(checkedAtMillis,
+                    currentLoaded == null ? null : currentLoaded.source,
                     e.getClass().getSimpleName() + ": "
                             + (e.getMessage() == null ? "refresh failed" : e.getMessage()));
         }
