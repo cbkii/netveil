@@ -17,8 +17,9 @@ public final class CountryRefreshJobService extends JobService {
         if (!CountryRefreshScheduler.enabled(this)) return false;
 
         stopped = false;
-        executor = Executors.newSingleThreadExecutor();
-        executor.execute(() -> {
+        ExecutorService localExecutor = Executors.newSingleThreadExecutor();
+        executor = localExecutor;
+        localExecutor.execute(() -> {
             try {
                 CountryPackStore.RefreshResult result = CountryPackStore.refreshBlocking(this);
                 if (stopped) return;
@@ -37,7 +38,7 @@ public final class CountryRefreshJobService extends JobService {
                 // extra retry cadence outside the user's Monthly/Weekly/Daily choice.
                 jobFinished(params, false);
             } finally {
-                if (executor != null) executor.shutdown();
+                localExecutor.shutdown();
             }
         });
         return true;
@@ -46,7 +47,8 @@ public final class CountryRefreshJobService extends JobService {
     @Override
     public boolean onStopJob(JobParameters params) {
         stopped = true;
-        if (executor != null) executor.shutdownNow();
+        ExecutorService current = executor;
+        if (current != null) current.shutdownNow();
         // Keep the configured periodic cadence instead of requesting an immediate/backoff retry.
         return false;
     }
