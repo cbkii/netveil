@@ -62,22 +62,32 @@ public final class Profile {
                 dnsSets == null ? Collections.emptyList() : dnsSets);
     }
 
-    /** Load a Global or custom profile. Legacy independent IP/gateway fields are migrated in memory. */
-    public static Profile load(SharedPreferences p, String target) {
-        List<NetworkIdentity> identities;
-        String identityKey = ConfigKeys.p(target, ConfigKeys.FIELD_IDENTITIES);
-        if (p.contains(identityKey)) {
-            identities = NetworkIdentity.parseStoredList(p.getString(identityKey, ""));
-        } else {
-            int legacyPrefix = clampPrefix(p.getInt(
-                    ConfigKeys.p(target, ConfigKeys.LEGACY_PREFIX), 24));
-            List<String> legacyIps = parseList(p.getString(
-                    ConfigKeys.p(target, ConfigKeys.LEGACY_IPV4), ""));
-            List<String> legacyGateways = parseList(p.getString(
-                    ConfigKeys.p(target, ConfigKeys.LEGACY_GATEWAYS), ""));
-            identities = NetworkIdentity.migrateLegacy(legacyIps, legacyGateways, legacyPrefix);
+    public static boolean hasCurrentSchema(SharedPreferences p) {
+        try {
+            return p.getInt(ConfigKeys.SCHEMA_VERSION, Integer.MIN_VALUE)
+                    == ConfigKeys.CURRENT_SCHEMA_VERSION;
+        } catch (ClassCastException ignored) {
+            return false;
         }
+    }
 
+    /**
+     * Initialise the current profile store or hard-reset an incompatible one.
+     *
+     * <p>The "profiles" SharedPreferences file contains only NetVeil profile configuration.
+     * Country-data cache and refresh scheduler state use separate storage and are not touched.</p>
+     */
+    public static boolean ensureCurrentSchema(SharedPreferences p) {
+        if (hasCurrentSchema(p)) return true;
+        return p.edit()
+                .clear()
+                .putInt(ConfigKeys.SCHEMA_VERSION, ConfigKeys.CURRENT_SCHEMA_VERSION)
+                .commit();
+    }
+
+    /** Load only the current structured profile format. */
+    public static Profile load(SharedPreferences p, String target) {
+        if (!hasCurrentSchema(p)) return null;
         return new Profile(
                 p.getBoolean(ConfigKeys.p(target, ConfigKeys.FIELD_ENABLED), false),
                 p.getBoolean(ConfigKeys.p(target, ConfigKeys.FIELD_RANDOMIZE), false),
@@ -85,32 +95,39 @@ public final class Profile {
                 p.getBoolean(ConfigKeys.p(target, ConfigKeys.FIELD_HIDE_PROXY), true),
                 p.getBoolean(ConfigKeys.p(target, ConfigKeys.FIELD_HIDE_IPV6), true),
                 p.getLong(ConfigKeys.p(target, ConfigKeys.FIELD_SELECTION_SEED), 0L),
-                identities,
+                NetworkIdentity.parseStoredList(
+                        p.getString(ConfigKeys.p(target, ConfigKeys.FIELD_IDENTITIES), "")),
                 parseDnsSets(p.getString(ConfigKeys.p(target, ConfigKeys.FIELD_DNS), ""))
         );
     }
 
-    /** Existing package profiles from v1.0.x become CUSTOM automatically until explicitly changed. */
     public static AppPolicy appPolicy(SharedPreferences p, String pkg) {
+        if (!hasCurrentSchema(p)) return AppPolicy.INHERIT_GLOBAL;
         String key = ConfigKeys.p(pkg, ConfigKeys.FIELD_POLICY);
-        if (p.contains(key)) return AppPolicy.fromStored(p.getString(key, null));
-        return hasStoredProfile(p, pkg) ? AppPolicy.CUSTOM : AppPolicy.INHERIT_GLOBAL;
+        return p.contains(key)
+                ? AppPolicy.fromStored(p.getString(key, null))
+                : AppPolicy.INHERIT_GLOBAL;
     }
 
     public static boolean hasStoredProfile(SharedPreferences p, String target) {
+        if (!hasCurrentSchema(p)) return false;
         return p.contains(ConfigKeys.p(target, ConfigKeys.FIELD_ENABLED))
                 || p.contains(ConfigKeys.p(target, ConfigKeys.FIELD_IDENTITIES))
-                || p.contains(ConfigKeys.p(target, ConfigKeys.LEGACY_IPV4))
                 || p.contains(ConfigKeys.p(target, ConfigKeys.FIELD_DNS));
     }
 
     /** Resolve exactly what a scoped target process should use. Vector/LSPosed remains the outer gate. */
     public static Resolved resolveEffective(SharedPreferences p, String pkg) {
+        if (!hasCurrentSchema(p)) return null;
         AppPolicy policy = appPolicy(p, pkg);
         if (policy == AppPolicy.DISABLED) return null;
-        if (policy == AppPolicy.CUSTOM) return load(p, pkg).resolve();
+        if (policy == AppPolicy.CUSTOM) {
+            Profile custom = load(p, pkg);
+            return custom == null ? null : custom.resolve();
+        }
 
         Profile global = load(p, ConfigKeys.GLOBAL);
+        if (global == null) return null;
         long effectiveSeed = derivePackageSeed(global.selectionSeed, pkg);
         return global.resolveWithSeed(effectiveSeed);
     }
@@ -183,50 +200,10 @@ public final class Profile {
         return Collections.unmodifiableList(sets);
     }
 
-    /** Legacy helpers retained for old tests/tools and migration diagnostics. */
-    public static boolean hasCompatibleGateway(List<String> ips, List<String> gateways, int prefix) {
-        return !compatibleIps(canonicalize(ips), canonicalize(gateways), prefix).isEmpty();
-    }
-
-    public static boolean allIpsHaveCompatibleGateway(List<String> ips, List<String> gateways, int prefix) {
-        List<String> canonicalIps = canonicalize(ips);
-        return !canonicalIps.isEmpty()
-                && compatibleIps(canonicalIps, canonicalize(gateways), prefix).size() == canonicalIps.size();
-    }
-
-    private static List<String> compatibleIps(List<String> ips, List<String> gateways, int prefix) {
-        List<String> eligible = new ArrayList<>();
-        for (String ip : ips) {
-            for (String gateway : gateways) {
-                if (!ip.equals(gateway) && Ipv4.sameSubnet(ip, gateway, prefix)) {
-                    eligible.add(ip);
-                    break;
-                }
-            }
-        }
-        return eligible;
-    }
-
-    private static List<String> canonicalize(List<String> values) {
-        List<String> out = new ArrayList<>();
-        if (values == null) return out;
-        for (String value : values) {
-            if (!Ipv4.isLiteral(value)) continue;
-            String canonical = Ipv4.canonical(value);
-            if (!out.contains(canonical)) out.add(canonical);
-        }
-        return out;
-    }
-
-    private static int clampPrefix(int p) {
-        return Math.max(0, Math.min(32, p));
-    }
-
     public static final class Resolved {
         public final String ipv4;
         public final NetworkIdentity.RouteMode routeMode;
         public final int prefixLength;
-        /** 0.0.0.0 is the compatibility sentinel on fixed-width legacy surfaces when routes are hidden. */
         public final String gateway;
         public final List<String> dns;
         public final boolean hideVpn;
@@ -239,7 +216,7 @@ public final class Profile {
             this.ipv4 = identity.ipv4;
             this.routeMode = identity.routeMode;
             this.prefixLength = identity.prefixLength;
-            this.gateway = identity.gateway == null ? "0.0.0.0" : identity.gateway;
+            this.gateway = identity.gateway;
             this.dns = Collections.unmodifiableList(new ArrayList<>(dns));
             this.hideVpn = hideVpn;
             this.hideProxy = hideProxy;
@@ -248,7 +225,7 @@ public final class Profile {
         }
 
         public boolean hasExplicitRoute() {
-            return routeMode == NetworkIdentity.RouteMode.EXPLICIT;
+            return routeMode == NetworkIdentity.RouteMode.EXPLICIT && gateway != null;
         }
     }
 }

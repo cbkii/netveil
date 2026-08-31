@@ -3,6 +3,7 @@ package io.github.cbkii.netveil.config;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
+import java.util.Objects;
 
 /** One coherent API-visible IPv4 identity. */
 public final class NetworkIdentity {
@@ -119,63 +120,12 @@ public final class NetworkIdentity {
         return String.join("\n", lines);
     }
 
-    /**
-     * Conservatively migrate the legacy independent IP/gateway whitelists.
-     *
-     * <p>An explicit route is created only when an IP has exactly one compatible gateway and the
-     * legacy topology itself is not ambiguous. Multi-value /0 profiles are intrinsically ambiguous
-     * because every different IPv4 is in the same prefix; these were also commonly used as a
-     * workaround for the old strict gateway validator. They therefore migrate entirely to
-     * route-hidden identities rather than preserving arbitrary /0 pairings.</p>
-     */
-    public static List<NetworkIdentity> migrateLegacy(List<String> ips,
-                                                      List<String> gateways,
-                                                      int prefixLength) {
-        List<String> canonicalIps = canonicalLiterals(ips);
-        if (canonicalIps.isEmpty()) return Collections.emptyList();
-        List<String> canonicalGateways = canonicalLiterals(gateways);
-        boolean ambiguousSlashZero = prefixLength == 0
-                && (canonicalIps.size() > 1 || canonicalGateways.size() > 1);
-
-        List<NetworkIdentity> out = new ArrayList<>();
-        for (String ip : canonicalIps) {
-            NetworkIdentity identity;
-            if (ambiguousSlashZero) {
-                identity = hidden(ip);
-            } else {
-                List<String> compatible = new ArrayList<>();
-                for (String candidate : canonicalGateways) {
-                    if (!candidate.equals(ip) && Ipv4.sameSubnet(ip, candidate, prefixLength)
-                            && !compatible.contains(candidate)) {
-                        compatible.add(candidate);
-                    }
-                }
-                identity = compatible.size() == 1
-                        ? explicit(ip, prefixLength, compatible.get(0))
-                        : hidden(ip);
-            }
-            if (!contains(out, identity)) out.add(identity);
-        }
-        return Collections.unmodifiableList(out);
-    }
-
-    private static List<String> canonicalLiterals(List<String> values) {
-        if (values == null || values.isEmpty()) return Collections.emptyList();
-        List<String> out = new ArrayList<>();
-        for (String raw : values) {
-            if (!Ipv4.isLiteral(raw)) continue;
-            String canonical = Ipv4.canonical(raw);
-            if (!out.contains(canonical)) out.add(canonical);
-        }
-        return out;
-    }
-
     private static boolean contains(List<NetworkIdentity> values, NetworkIdentity candidate) {
         for (NetworkIdentity value : values) {
             if (value.ipv4.equals(candidate.ipv4)
                     && value.routeMode == candidate.routeMode
                     && value.prefixLength == candidate.prefixLength
-                    && java.util.Objects.equals(value.gateway, candidate.gateway)) {
+                    && Objects.equals(value.gateway, candidate.gateway)) {
                 return true;
             }
         }

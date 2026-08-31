@@ -49,7 +49,7 @@ public class NetworkIdentityTest {
     }
 
     @Test
-    public void storedRoundTripPreservesRouteMode() {
+    public void storedRoundTripPreservesRouteModeAndAbsence() {
         List<NetworkIdentity> values = List.of(
                 NetworkIdentity.hidden("202.128.115.2"),
                 NetworkIdentity.explicit("192.168.1.20", 24, "192.168.1.1"));
@@ -57,37 +57,17 @@ public class NetworkIdentityTest {
                 NetworkIdentity.serializeList(values));
         assertEquals(2, parsed.size());
         assertEquals(NetworkIdentity.RouteMode.HIDDEN, parsed.get(0).routeMode);
+        assertNull(parsed.get(0).gateway);
         assertEquals("192.168.1.1", parsed.get(1).gateway);
     }
 
     @Test
-    public void migrationOnlyPairsUnambiguousGateways() {
-        List<NetworkIdentity> migrated = NetworkIdentity.migrateLegacy(
-                List.of("192.168.1.20", "10.0.0.20"),
-                List.of("192.168.1.1", "10.0.0.1", "10.0.0.254"), 24);
-        assertEquals(NetworkIdentity.RouteMode.EXPLICIT, migrated.get(0).routeMode);
-        assertEquals(NetworkIdentity.RouteMode.HIDDEN, migrated.get(1).routeMode);
-    }
-
-    @Test
-    public void multiValueLegacySlashZeroMigratesEntirelyHidden() {
-        List<NetworkIdentity> migrated = NetworkIdentity.migrateLegacy(
-                List.of("202.128.115.2", "1.129.22.61"),
-                List.of("192.168.1.1", "202.128.115.2"), 0);
-        assertEquals(2, migrated.size());
-        assertEquals(NetworkIdentity.RouteMode.HIDDEN, migrated.get(0).routeMode);
-        assertEquals(NetworkIdentity.RouteMode.HIDDEN, migrated.get(1).routeMode);
-        assertNull(migrated.get(0).gateway);
-        assertNull(migrated.get(1).gateway);
-    }
-
-    @Test
-    public void singlePairLegacySlashZeroMayRemainExplicit() {
-        List<NetworkIdentity> migrated = NetworkIdentity.migrateLegacy(
-                List.of("1.129.22.61"), List.of("192.168.1.1"), 0);
-        assertEquals(1, migrated.size());
-        assertEquals(NetworkIdentity.RouteMode.EXPLICIT, migrated.get(0).routeMode);
-        assertEquals("192.168.1.1", migrated.get(0).gateway);
+    public void invalidStoredEntriesAreDroppedRatherThanConverted() {
+        List<NetworkIdentity> parsed = NetworkIdentity.parseStoredList(
+                "192.168.1.20\nH|202.128.115.2\nE|192.168.1.20|24|192.168.1.1");
+        assertEquals(2, parsed.size());
+        assertEquals("202.128.115.2", parsed.get(0).ipv4);
+        assertEquals("192.168.1.20", parsed.get(1).ipv4);
     }
 
     @Test

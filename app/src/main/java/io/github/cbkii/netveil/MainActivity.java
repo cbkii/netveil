@@ -93,6 +93,14 @@ public final class MainActivity extends Activity {
     public void onCreate(Bundle state) {
         super.onCreate(state);
         prefs = getSharedPreferences(ConfigKeys.PREFS, MODE_PRIVATE);
+        boolean profileSchemaReset = !prefs.getAll().isEmpty() && !Profile.hasCurrentSchema(prefs);
+        if (!Profile.ensureCurrentSchema(prefs)) {
+            Toast.makeText(this, "Unable to initialise NetVeil profile storage.", Toast.LENGTH_LONG)
+                    .show();
+            finish();
+            return;
+        }
+
         ui = new UiFactory(this);
         getWindow().setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE);
 
@@ -147,6 +155,11 @@ public final class MainActivity extends Activity {
         selectTarget(ConfigKeys.GLOBAL);
         setContentView(scroll);
         scroll.requestApplyInsets();
+        if (profileSchemaReset) {
+            Toast.makeText(this,
+                    "Previous profile configuration was cleared for the current NetVeil format.",
+                    Toast.LENGTH_LONG).show();
+        }
     }
 
     private void buildHeader() {
@@ -269,7 +282,7 @@ public final class MainActivity extends Activity {
         card.addView(ui.sectionTitle("Network identities"));
         card.addView(ui.helper(
                 "Each entry is a complete app-visible identity. Omit gateway & routes is the normal "
-                        + "choice for arbitrary IPv4 values and does not require a fake subnet or /0 workaround."));
+                        + "choice for arbitrary IPv4 values."));
 
         identitiesContainer = ui.vertical();
         identitiesContainer.setLayoutParams(ui.matchWrap());
@@ -801,8 +814,7 @@ public final class MainActivity extends Activity {
         for (String field : new String[]{
                 ConfigKeys.FIELD_ENABLED, ConfigKeys.FIELD_RANDOMIZE, ConfigKeys.FIELD_HIDE_VPN,
                 ConfigKeys.FIELD_HIDE_PROXY, ConfigKeys.FIELD_HIDE_IPV6,
-                ConfigKeys.FIELD_SELECTION_SEED, ConfigKeys.FIELD_IDENTITIES, ConfigKeys.FIELD_DNS,
-                ConfigKeys.LEGACY_PREFIX, ConfigKeys.LEGACY_IPV4, ConfigKeys.LEGACY_GATEWAYS}) {
+                ConfigKeys.FIELD_SELECTION_SEED, ConfigKeys.FIELD_IDENTITIES, ConfigKeys.FIELD_DNS}) {
             editor.remove(ConfigKeys.p(target, field));
         }
     }

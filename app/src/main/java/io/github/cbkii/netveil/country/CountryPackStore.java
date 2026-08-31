@@ -27,6 +27,8 @@ public final class CountryPackStore {
     public static final String UPDATE_URL =
             "https://raw.githubusercontent.com/cbkii/netveil/main/app/src/main/assets/country-ip-pack.json";
 
+    private static final Object REFRESH_LOCK = new Object();
+
     public enum Source {
         BUNDLED("Bundled with APK"),
         ONLINE_CACHE("Online cache");
@@ -63,7 +65,14 @@ public final class CountryPackStore {
         }
     }
 
+    /** Manual and scheduled refreshes share one process-wide fetch/classify/replace transaction. */
     public static RefreshResult refreshBlocking(Context context) {
+        synchronized (REFRESH_LOCK) {
+            return refreshLocked(context);
+        }
+    }
+
+    private static RefreshResult refreshLocked(Context context) {
         Path cache = context.getFilesDir().toPath().resolve(CACHE_NAME);
         Path temp = context.getFilesDir().toPath().resolve(CACHE_NAME + ".tmp");
         Loaded currentLoaded = null;

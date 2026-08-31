@@ -7,6 +7,7 @@ import java.util.List;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotEquals;
+import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
 
 public class ProfileTest {
@@ -66,32 +67,13 @@ public class ProfileTest {
     }
 
     @Test
-    public void routeHiddenProfileResolvesWithoutGateway() {
+    public void routeHiddenProfileHasNoGateway() {
         Profile profile = Profile.create(true, false, true, true, false, 1L,
                 List.of(NetworkIdentity.hidden("202.128.115.2")),
                 List.of(List.of("1.1.1.1")));
         Profile.Resolved resolved = profile.resolve();
         assertEquals(NetworkIdentity.RouteMode.HIDDEN, resolved.routeMode);
         assertFalse(resolved.hasExplicitRoute());
-    }
-
-    @Test
-    public void gatewayCompatibilityUsesNumericIdentity() {
-        assertTrue(Profile.hasCompatibleGateway(
-                List.of("192.168.050.020"), List.of("192.168.50.1"), 24));
-        assertFalse(Profile.hasCompatibleGateway(
-                List.of("192.168.50.20"), List.of("192.168.60.1"), 24));
-        assertFalse(Profile.hasCompatibleGateway(
-                List.of("192.168.050.020"), List.of("192.168.50.20"), 24));
-    }
-
-    @Test
-    public void everyWhitelistedIpMustHaveACompatibleGatewayLegacyHelper() {
-        assertTrue(Profile.allIpsHaveCompatibleGateway(
-                List.of("192.168.50.20", "10.0.0.20"),
-                List.of("192.168.50.1", "10.0.0.1"), 24));
-        assertFalse(Profile.allIpsHaveCompatibleGateway(
-                List.of("192.168.50.20", "10.0.0.20"),
-                List.of("192.168.50.1"), 24));
+        assertNull(resolved.gateway);
     }
 }

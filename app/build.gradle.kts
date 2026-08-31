@@ -22,7 +22,7 @@ android {
     defaultConfig {
         applicationId = "dev.ip.netveil"
         minSdk = 35
-        targetSdk = 35
+        targetSdk = 36
         versionCode = 205
         versionName = "1.1.1"
     }
@@ -73,8 +73,7 @@ android {
 }
 
 dependencies {
-    // API 101 remains intentional for compatibility with current Vector/LSPosed API-101+ frameworks.
-    compileOnly("io.github.libxposed:api:101.0.1")
+    compileOnly("io.github.libxposed:api:102.0.0")
     testImplementation("junit:junit:4.13.2")
     // Android's org.json implementation is not executable in local JVM tests.
     testImplementation("org.json:json:20240303")
