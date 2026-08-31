@@ -13,6 +13,7 @@ public final class CountryRefreshScheduler {
     public static final String KEY_FREQUENCY = "refresh_frequency";
     public static final String KEY_LAST_SUCCESS = "last_refresh_success";
     public static final String KEY_LAST_ERROR = "last_refresh_error";
+    public static final String KEY_SCHEDULE_ERROR = "refresh_schedule_error";
     private static final int JOB_ID = 0x4e5650;
 
     public enum Frequency {
@@ -35,6 +36,25 @@ public final class CountryRefreshScheduler {
         }
     }
 
+    public static final class ScheduleResult {
+        public final boolean success;
+        public final String error;
+
+        private ScheduleResult(boolean success, String error) {
+            this.success = success;
+            this.error = error;
+        }
+
+        static ScheduleResult success() {
+            return new ScheduleResult(true, null);
+        }
+
+        static ScheduleResult failure(String error) {
+            return new ScheduleResult(false,
+                    error == null || error.isBlank() ? "JobScheduler rejected the refresh job" : error);
+        }
+    }
+
     private CountryRefreshScheduler() {}
 
     public static SharedPreferences preferences(Context context) {
@@ -50,32 +70,89 @@ public final class CountryRefreshScheduler {
                 KEY_FREQUENCY, Frequency.MONTHLY.storedValue));
     }
 
-    public static void configure(Context context, boolean enabled, Frequency frequency) {
-        preferences(context).edit()
-                .putBoolean(KEY_AUTO, enabled)
-                .putString(KEY_FREQUENCY, frequency.storedValue)
-                .apply();
-        if (enabled) schedule(context, frequency); else cancel(context);
+    public static String scheduleError(Context context) {
+        return preferences(context).getString(KEY_SCHEDULE_ERROR, "");
     }
 
-    public static void ensureScheduled(Context context) {
-        if (enabled(context)) schedule(context, frequency(context));
+    /**
+     * Applies the user's requested automatic-refresh state transactionally. A failed enable never
+     * leaves KEY_AUTO=true, so a runtime scheduling problem cannot become a persistent launch crash.
+     */
+    public static ScheduleResult configure(Context context, boolean enabled, Frequency frequency) {
+        SharedPreferences prefs = preferences(context);
+        if (!enabled) {
+            ScheduleResult cancelled = cancel(context);
+            SharedPreferences.Editor editor = prefs.edit()
+                    .putBoolean(KEY_AUTO, false)
+                    .putString(KEY_FREQUENCY, frequency.storedValue);
+            if (cancelled.success) editor.remove(KEY_SCHEDULE_ERROR);
+            else editor.putString(KEY_SCHEDULE_ERROR, cancelled.error);
+            editor.apply();
+            return cancelled;
+        }
+
+        ScheduleResult scheduled = schedule(context, frequency);
+        SharedPreferences.Editor editor = prefs.edit()
+                .putBoolean(KEY_AUTO, scheduled.success)
+                .putString(KEY_FREQUENCY, frequency.storedValue);
+        if (scheduled.success) editor.remove(KEY_SCHEDULE_ERROR);
+        else editor.putString(KEY_SCHEDULE_ERROR, scheduled.error);
+        editor.apply();
+        return scheduled;
     }
 
-    private static void schedule(Context context, Frequency frequency) {
+    /**
+     * Re-establishes a persisted periodic job without allowing JobScheduler failures to escape into
+     * Activity startup. If restoration fails, automatic refresh is disabled until the user retries.
+     */
+    public static ScheduleResult ensureScheduled(Context context) {
+        if (!enabled(context)) return ScheduleResult.success();
+        Frequency frequency = frequency(context);
+        ScheduleResult result = schedule(context, frequency);
+        SharedPreferences.Editor editor = preferences(context).edit();
+        if (result.success) {
+            editor.remove(KEY_SCHEDULE_ERROR);
+        } else {
+            editor.putBoolean(KEY_AUTO, false)
+                    .putString(KEY_SCHEDULE_ERROR, result.error);
+        }
+        editor.apply();
+        return result;
+    }
+
+    private static ScheduleResult schedule(Context context, Frequency frequency) {
         JobScheduler scheduler = context.getSystemService(JobScheduler.class);
-        if (scheduler == null) return;
+        if (scheduler == null) return ScheduleResult.failure("JobScheduler is unavailable");
         JobInfo job = new JobInfo.Builder(JOB_ID,
                 new ComponentName(context, CountryRefreshJobService.class))
                 .setRequiredNetworkType(JobInfo.NETWORK_TYPE_ANY)
                 .setPersisted(true)
                 .setPeriodic(frequency.intervalMillis)
                 .build();
-        scheduler.schedule(job);
+        try {
+            int result = scheduler.schedule(job);
+            return result == JobScheduler.RESULT_SUCCESS
+                    ? ScheduleResult.success()
+                    : ScheduleResult.failure("JobScheduler rejected the refresh job");
+        } catch (RuntimeException e) {
+            return ScheduleResult.failure(safeMessage(e));
+        }
     }
 
-    private static void cancel(Context context) {
+    private static ScheduleResult cancel(Context context) {
         JobScheduler scheduler = context.getSystemService(JobScheduler.class);
-        if (scheduler != null) scheduler.cancel(JOB_ID);
+        if (scheduler == null) return ScheduleResult.success();
+        try {
+            scheduler.cancel(JOB_ID);
+            return ScheduleResult.success();
+        } catch (RuntimeException e) {
+            return ScheduleResult.failure(safeMessage(e));
+        }
+    }
+
+    private static String safeMessage(RuntimeException e) {
+        String message = e.getMessage();
+        return e.getClass().getSimpleName()
+                + (message == null || message.isBlank() ? "" : ": " + message);
     }
 }
