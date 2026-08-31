@@ -23,8 +23,8 @@ android {
         applicationId = "dev.ip.netveil"
         minSdk = 35
         targetSdk = 35
-        versionCode = 203
-        versionName = "1.0.1"
+        versionCode = 204
+        versionName = "1.1.0"
     }
 
     signingConfigs {
