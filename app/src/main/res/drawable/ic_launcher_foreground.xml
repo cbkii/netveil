@@ -6,45 +6,54 @@
     android:viewportHeight="108">
 
     <!--
-      Keep essential artwork inside the central 66x66 adaptive-icon safe area (21..87),
-      but use more of that area so the mark has stronger visual weight at launcher size.
+      The raw mark fits the 66x66 adaptive-icon safe zone (21..87), but filling that
+      zone edge-to-edge is optically too large on Pixel launcher, Android splash, and
+      in-app AdaptiveIconDrawable rendering. Keep one shared source of truth and scale
+      the complete mark to 78% around the canvas centre. The visible artwork therefore
+      sits at roughly 28.3..79.7, leaving deliberate breathing room inside the safe zone.
     -->
+    <group
+        android:pivotX="54"
+        android:pivotY="54"
+        android:scaleX="0.78"
+        android:scaleY="0.78">
 
-    <!-- Upper IP identity. -->
-    <path
-        android:fillColor="#DDEEFF"
-        android:pathData="M26,21H82C84.8,21 87,23.2 87,26V34C87,36.8 84.8,39 82,39H26C23.2,39 21,36.8 21,34V26C21,23.2 23.2,21 26,21Z" />
-    <path
-        android:fillColor="#3B82F6"
-        android:pathData="M26,25H36V35H26ZM42,25H52V35H42ZM58,25H68V35H58ZM74,25H84V35H74Z" />
+        <!-- Upper IP identity. -->
+        <path
+            android:fillColor="#DDEEFF"
+            android:pathData="M26,21H82C84.8,21 87,23.2 87,26V34C87,36.8 84.8,39 82,39H26C23.2,39 21,36.8 21,34V26C21,23.2 23.2,21 26,21Z" />
+        <path
+            android:fillColor="#3B82F6"
+            android:pathData="M26,25H36V35H26ZM42,25H52V35H42ZM58,25H68V35H58ZM74,25H84V35H74Z" />
 
-    <!-- Crossing routes: teal under blue. -->
-    <path
-        android:fillColor="@android:color/transparent"
-        android:strokeColor="#14B8A6"
-        android:strokeWidth="8.5"
-        android:strokeLineCap="round"
-        android:strokeLineJoin="round"
-        android:pathData="M25.25,45C39,45 43,48 50,54C58,62 63,62 79,62" />
-    <path
-        android:fillColor="#14B8A6"
-        android:pathData="M77,54L87,62L77,68Z" />
-    <path
-        android:fillColor="@android:color/transparent"
-        android:strokeColor="#3B82F6"
-        android:strokeWidth="8.5"
-        android:strokeLineCap="round"
-        android:strokeLineJoin="round"
-        android:pathData="M25.25,63C39,63 43,60 50,54C58,46 63,46 79,46" />
-    <path
-        android:fillColor="#3B82F6"
-        android:pathData="M77,40L87,46L77,52Z" />
+        <!-- Crossing routes: teal under blue. -->
+        <path
+            android:fillColor="@android:color/transparent"
+            android:strokeColor="#14B8A6"
+            android:strokeWidth="8.5"
+            android:strokeLineCap="round"
+            android:strokeLineJoin="round"
+            android:pathData="M25.25,45C39,45 43,48 50,54C58,62 63,62 79,62" />
+        <path
+            android:fillColor="#14B8A6"
+            android:pathData="M77,54L87,62L77,68Z" />
+        <path
+            android:fillColor="@android:color/transparent"
+            android:strokeColor="#3B82F6"
+            android:strokeWidth="8.5"
+            android:strokeLineCap="round"
+            android:strokeLineJoin="round"
+            android:pathData="M25.25,63C39,63 43,60 50,54C58,46 63,46 79,46" />
+        <path
+            android:fillColor="#3B82F6"
+            android:pathData="M77,40L87,46L77,52Z" />
 
-    <!-- Lower IP identity. -->
-    <path
-        android:fillColor="#C9FFF2"
-        android:pathData="M26,69H82C84.8,69 87,71.2 87,74V82C87,84.8 84.8,87 82,87H26C23.2,87 21,84.8 21,82V74C21,71.2 23.2,69 26,69Z" />
-    <path
-        android:fillColor="#0FA99B"
-        android:pathData="M26,73H36V83H26ZM42,73H52V83H42ZM58,73H68V83H58ZM74,73H84V83H74Z" />
+        <!-- Lower IP identity. -->
+        <path
+            android:fillColor="#C9FFF2"
+            android:pathData="M26,69H82C84.8,69 87,71.2 87,74V82C87,84.8 84.8,87 82,87H26C23.2,87 21,84.8 21,82V74C21,71.2 23.2,69 26,69Z" />
+        <path
+            android:fillColor="#0FA99B"
+            android:pathData="M26,73H36V83H26ZM42,73H52V83H42ZM58,73H68V83H58ZM74,73H84V83H74Z" />
+    </group>
 </vector>
