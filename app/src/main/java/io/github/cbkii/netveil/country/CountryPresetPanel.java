@@ -221,24 +221,35 @@ public final class CountryPresetPanel {
                 "Checking the latest validated country data online…");
         ExecutorService executor = Executors.newSingleThreadExecutor();
         executor.execute(() -> {
-            CountryPackStore.RefreshResult result;
             try {
-                result = CountryPackStore.refreshBlocking(activity);
-            } catch (Exception e) {
-                result = CountryPackStore.RefreshResult.failure(
+                CountryPackStore.RefreshResult result;
+                try {
+                    result = CountryPackStore.refreshBlocking(activity);
+                } catch (Exception e) {
+                    result = CountryPackStore.RefreshResult.failure(
+                            System.currentTimeMillis(), loaded == null ? null : loaded.source,
+                            safeMessage(e));
+                }
+                CountryRefreshScheduler.recordRefreshResult(activity, result);
+            } catch (RuntimeException e) {
+                CountryPackStore.RefreshResult failed = CountryPackStore.RefreshResult.failure(
                         System.currentTimeMillis(), loaded == null ? null : loaded.source,
                         safeMessage(e));
+                try {
+                    CountryRefreshScheduler.recordRefreshResult(activity, failed);
+                } catch (RuntimeException ignored) {
+                    // UI still recovers below even if local metadata persistence itself failed.
+                }
+            } finally {
+                if (!activity.isDestroyed()) {
+                    activity.runOnUiThread(() -> {
+                        if (activity.isDestroyed()) return;
+                        refresh.setEnabled(true);
+                        loadLocal();
+                    });
+                }
+                executor.shutdown();
             }
-            CountryRefreshScheduler.recordRefreshResult(activity, result);
-
-            if (!activity.isDestroyed()) {
-                activity.runOnUiThread(() -> {
-                    if (activity.isDestroyed()) return;
-                    refresh.setEnabled(true);
-                    loadLocal();
-                });
-            }
-            executor.shutdown();
         });
     }
 
