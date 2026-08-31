@@ -1,76 +1,125 @@
-# NetVeil
+<p align="center">
+  <img src="docs/assets/netveil-icon.svg" alt="NetVeil app icon" width="132" />
+</p>
 
-NetVeil is a deliberately narrow **modern LSPosed/libxposed module for Android 15+** that masks app-visible network identity inside selected application processes.
+<h1 align="center">NetVeil</h1>
 
-It is not a general device-spoofing framework and does not reroute traffic. NetVeil is limited to:
+<p align="center">
+  <strong>Control the network details that selected Android apps can see.</strong>
+</p>
 
-- whitelisted local IPv4 identity;
-- optional virtual gateway/route identity;
-- whitelisted DNS sets;
-- VPN visibility hiding;
-- proxy visibility hiding;
-- optional IPv6 suppression on covered Java/Android metadata surfaces;
-- optional country/provider presets that populate the same IPv4 whitelist model.
+<p align="center">
+  <a href="https://github.com/cbkii/netveil/actions/workflows/build.yml"><img alt="Build status" src="https://github.com/cbkii/netveil/actions/workflows/build.yml/badge.svg" /></a>
+  <img alt="Android 15+" src="https://img.shields.io/badge/Android-15%2B-3DDC84?logo=android&logoColor=white" />
+  <a href="LICENSE"><img alt="License: Apache-2.0" src="https://img.shields.io/badge/License-Apache--2.0-blue.svg" /></a>
+</p>
 
-NetVeil has no VPN service, root daemon, analytics, advertising SDK, Compose stack or AndroidX UI dependency. It does not change the public/source IP observed by remote servers.
+NetVeil is a small **Vector/LSPosed module for Android 15 and newer**. It changes selected network information reported to apps that you choose in Vector/LSPosed.
 
-The configuration app requests Android `INTERNET` only to refresh NetVeil's small public country/provider candidate database. It does **not** upload profiles, installed-app lists, selected spoofed values, device identifiers, Vector/LSPosed scope, analytics or telemetry. Automatic refresh is off by default.
+You can give scoped apps a chosen IPv4 identity and DNS servers, hide common VPN or proxy indicators, and optionally hide IPv6 addresses on the Android APIs NetVeil covers.
 
-## Scope and profile model
+> [!IMPORTANT]
+> NetVeil does **not** change your real/public IP address, route traffic, disconnect a VPN, or act as a VPN/proxy. Websites and remote servers still see the real network connection used by the device.
 
-**Vector/LSPosed scope is the outer execution gate.** NetVeil does not inject itself into arbitrary apps and its Global profile does not broaden framework scope.
+## What NetVeil can do
 
-The configuration UI defaults to:
+- Use one or more allowed IPv4 identities.
+- Use one or more allowed DNS sets.
+- Omit gateway and route details, or present a coherent virtual IPv4 network.
+- Hide common app-visible VPN indicators.
+- Hide common app-visible proxy indicators.
+- Optionally suppress IPv6 addresses on covered APIs.
+- Randomly choose from your saved identities and DNS sets while keeping each app internally consistent.
+- Use one **Global** profile for all scoped apps, with optional per-app overrides.
+- Add IPv4 candidates from built-in country presets for Australia, United States, United Kingdom, Indonesia and France.
+
+For implementation details and the exact API coverage, see [Advanced documentation](README_ADV.md).
+
+## Requirements
+
+- **Android 15 or newer** (`API 35+`).
+- A working **Vector/LSPosed** environment compatible with modern libxposed modules.
+- NetVeil enabled in Vector/LSPosed.
+- Each app you want NetVeil to affect selected in Vector/LSPosed scope.
+
+NetVeil does not expand its own scope. If an app is not scoped in Vector/LSPosed, NetVeil does not run inside that app.
+
+See [Compatibility](docs/COMPATIBILITY.md) for the current support baseline.
+
+## Install
+
+1. Download the APK from [GitHub Releases](https://github.com/cbkii/netveil/releases).
+2. Install the APK normally and open **NetVeil**.
+3. Enable NetVeil in Vector/LSPosed.
+4. Select the apps you want NetVeil to affect in Vector/LSPosed scope.
+5. Configure the **All scoped apps (Global)** profile in NetVeil.
+6. Save your changes.
+7. Force-stop and reopen each affected app so it starts with the new profile.
+
+You can then add per-app overrides if needed.
+
+## Quick setup
+
+### 1. Start with Global
+
+NetVeil opens on:
 
 ```text
 ★ All scoped apps (Global)
 ```
 
-That profile is the fallback for any app process where Vector/LSPosed has already loaded NetVeil. A package can optionally override it with one of three policies:
+Global is the default profile for every app that is already scoped in Vector/LSPosed.
 
-```text
-INHERIT_GLOBAL   use the Global profile
-CUSTOM           use a package-specific profile
-DISABLED         install no NetVeil profile hooks for this package
-```
+A simple starting configuration is:
 
-Existing package profiles from the pre-Global configuration format are treated as `CUSTOM` until the user explicitly changes their policy, preserving upgrade behaviour.
+1. Leave **Enable masking for this profile** on.
+2. Add one or more **Network identities**.
+3. For ordinary spoofed IPv4 values, use **Omit gateway & routes**.
+4. Add at least one DNS set.
+5. Leave the privacy switches you want enabled.
+6. Turn on randomisation only if you want NetVeil to choose between multiple saved identities or DNS sets.
+7. Press **Save changes**.
 
-NetVeil remains on libxposed API `101.0.1` with `minApiVersion=101`, `targetApiVersion=101`, `staticScope=false`, and an empty recommended `scope.list`. The current official `libxposed/service` line is API 102, so NetVeil intentionally does **not** add that service dependency merely to query/manage scope. Vector/LSPosed Manager remains the authoritative external scope manager for this API-101 compatibility baseline.
+### 2. Restart the target app
 
-## Target selector
+Profile and scope changes apply when the target process starts. Force-stop and reopen the app after:
 
-The configuration screen no longer requires a blank package-name-first workflow. The target selector includes:
+- changing a profile;
+- changing Vector/LSPosed scope;
+- pressing **Reroll** or **Reroll Global**.
 
-- **All scoped apps (Global)**;
-- saved/custom package names;
-- launchable installed applications visible through normal Android launcher-package queries;
-- manual exact package entry as a fallback.
+A full phone reboot is normally unnecessary for an ordinary profile edit.
 
-NetVeil declares only a launcher-intent `<queries>` visibility rule for this picker. It does not request `QUERY_ALL_PACKAGES`.
+## Global and per-app profiles
+
+Vector/LSPosed scope is always the outer gate. Inside that scope, NetVeil provides three choices for an individual app:
+
+| Mode | What it does |
+| --- | --- |
+| **Use Global** | Uses the Global profile. |
+| **Custom** | Uses separate settings saved only for that app. |
+| **Off for this app** | NetVeil installs no profile hooks for that app, even if Vector/LSPosed still scopes it. |
+
+Use **Global** for the common setup and create **Custom** profiles only where an app needs different values.
 
 ## Network identities
 
-Profiles contain one or more complete `NetworkIdentity` entries rather than independent IP and gateway whitelists.
+Each saved identity keeps its IPv4 address and route settings together. NetVeil does not randomly combine an address with an unrelated gateway.
 
-Each identity has one of two route modes.
+### Omit gateway & routes — recommended
 
-### Hide gateway/routes — default
-
-Only an IPv4 value is required:
+Use this for most arbitrary IPv4 identities. You only need to enter an IPv4 address.
 
 ```text
 IPv4: 202.128.115.2
-Gateway/routes: hidden
+Gateway & routes: omitted
 ```
 
-This mode is intended for arbitrary API-visible IP identities. It uses a host-only IPv4 representation on covered fixed-width address surfaces, exposes no synthetic IPv4 gateway/default route in projected `LinkProperties`, and avoids requiring a fake subnet relationship.
-
-This is the normal replacement for the old `/0` workaround.
+This replaces the old need to use a `/0` prefix just to make unrelated public IPv4 values pass gateway validation.
 
 ### Explicit virtual network — advanced
 
-Use this only when the target should see a coherent virtual LAN:
+Use this only when the app should see a coherent IPv4 network with a prefix and gateway.
 
 ```text
 IPv4:    192.168.50.20
@@ -78,62 +127,26 @@ Prefix:  /24
 Gateway: 192.168.50.1
 ```
 
-The gateway must:
+The gateway must be different from the IPv4 address and belong to the selected subnet. NetVeil validates this before saving.
 
-- be a valid IPv4 literal;
-- differ from the client IPv4;
-- belong to the configured prefix.
+For the underlying projection model, see [Advanced documentation](README_ADV.md#network-projection-model).
 
-`/0` remains valid CIDR and is accepted, but the UI warns that it covers the entire IPv4 address space and is unusual for a local network.
+## DNS and randomisation
 
-## Randomisation
-
-Randomisation always selects a **whole NetworkIdentity** and a **whole DNS set**. It never independently mixes an IP with an unrelated gateway.
-
-For a Custom package profile, the saved selection seed is package-local and stable until **Reroll**.
-
-For Global, NetVeil derives the effective seed from:
+Enter one selectable DNS set per line. Separate multiple servers in the same set with commas.
 
 ```text
-Global base seed + actual package name
+1.1.1.1, 1.0.0.1
+9.9.9.9, 149.112.112.112
 ```
 
-This means:
+When randomisation is enabled, NetVeil selects a **whole network identity** and a **whole DNS set**. The choice stays stable for that app until you reroll it.
 
-- all processes belonging to one package receive the same stable selection;
-- different inheriting packages can receive different whitelist-derived selections;
-- **Reroll Global** changes the base seed and deterministically rerolls all inheriting packages after their processes are restarted.
+With Global randomisation, different apps can receive different stable selections from the same allowed lists.
 
-## Migration from older profiles
+## Country IPv4 presets
 
-The configuration schema is versioned. Older profiles containing independent IPv4/gateway whitelists and one prefix remain readable.
-
-Migration is conservative:
-
-- if a legacy IPv4 has exactly one compatible gateway, it becomes an Explicit identity;
-- if the mapping is absent or ambiguous, it becomes a route-hidden identity instead of guessing;
-- old preference fields remain readable until the profile is explicitly reset/removed, allowing rollback/debug inspection.
-
-Saving through the new UI writes the structured identity format.
-
-## Configuration UX
-
-The configuration screen uses platform Android widgets only. It provides:
-
-- persistent field labels and helper text;
-- inline identity validation;
-- an explicit `/0` warning;
-- parsed DNS-set feedback;
-- a resolved-profile preview;
-- Global/custom/disabled policy visibility;
-- Save-time focus/scroll to invalid inputs;
-- Toasts only for transient operations such as Save, Reroll and Delete.
-
-If the editable target text is changed directly, Save first loads that target and requires a second explicit Save after review. This prevents unsaved Global/custom form contents from being accidentally written under a newly typed package.
-
-## Country ISP IPv4 presets
-
-NetVeil can populate the current profile's IPv4 identities from a deliberately small country/provider candidate pack for:
+The **Country IPv4 preset** section can add a small set of candidate addresses for:
 
 - Australia;
 - United States;
@@ -141,182 +154,70 @@ NetVeil can populate the current profile's IPv4 identities from a deliberately s
 - Indonesia;
 - France.
 
-The ordinary UI remains intentionally simple:
+The normal defaults keep only high-confidence provider candidates and exclude addresses currently known by the data sources as VPN, proxy or Tor endpoints.
 
-```text
-Country
-[ Australia ▼ ]
+Use:
 
-☑ Exclude medium/low-confidence providers
-☑ Exclude known VPN / proxy / Tor addresses
+- **Add to list** to keep your existing identities and append the preset;
+- **Replace list** to replace the current identity list with the preset.
 
-[ Add to list ]  [ Replace list ]
-```
+Imported addresses use **Omit gateway & routes**. NetVeil does not invent an ISP gateway for them.
 
-There is no per-ISP/ASN picker. Imported values become ordinary **route-hidden** `NetworkIdentity` entries, so NetVeil never guesses an ISP gateway or forces a public candidate into a fabricated LAN prefix.
+Manual refresh downloads and validates a small public data pack. Automatic refresh is **off by default** and, when enabled, updates only the cached country data—not your saved profiles.
 
-The pack is generated repository-side from public routing/allocation/provider evidence, including the relevant RIR delegated statistics and current RouteViews origins, with limited PeeringDB classification corroboration and optional Tor/X4B/monosans exclusion intelligence. Candidate IPs are never pinged, scanned or contacted.
+For data sources, filtering rules and maintenance details, see [Country data](docs/COUNTRY-DATA.md).
 
-The labels are deliberately conservative: these are **consumer/access-provider candidate addresses**, not verified residential subscribers and not guaranteed non-VPN addresses. The default anonymity filter means only “no known VPN/proxy/Tor match in the current exclusion data”.
+## Privacy and permissions
 
-The app uses this fallback order:
+NetVeil has no analytics, advertising or telemetry.
 
-1. valid refreshed cache;
-2. valid previous cache;
-3. bundled APK pack.
+The APK declares these normal Android permissions:
 
-**Refresh country data now** downloads one bounded HTTPS NetVeil pack and validates it before replacing the app-private cache. A failed refresh leaves the previous valid/bundled data intact and never prevents ordinary manual profile use.
+| Permission | Why it is used |
+| --- | --- |
+| `android.permission.INTERNET` | Download the optional public country-data pack. |
+| `android.permission.ACCESS_NETWORK_STATE` | Allow the optional scheduled refresh job to require network connectivity on modern Android. |
+| `android.permission.RECEIVE_BOOT_COMPLETED` | Allow Android to preserve the optional scheduled country-data refresh job across reboot. |
 
-Automatic refresh is **off by default**. When explicitly enabled it defaults to **Monthly**, with Weekly and Daily options. Platform `JobScheduler` is used instead of AndroidX/WorkManager. Automatic refresh only updates the cached country database; it does not silently alter any saved IPv4 profile.
+These are normal permissions and do not create runtime permission prompts.
 
-The online pack URL must be anonymously HTTPS-readable. If the repository/data endpoint is private or unavailable, online refresh fails safely and bundled/cached country data continues to work.
+NetVeil does not upload your profiles, installed-app list, selected spoofed values, device identifiers or Vector/LSPosed scope.
 
-See [`docs/COUNTRY-DATA.md`](docs/COUNTRY-DATA.md) for generation rules, source attribution/terms, confidence/exclusion semantics and maintenance policy.
+If the country-data endpoint is unavailable, the bundled or previously cached data remains usable.
 
-## v1 network-projection architecture
+## Limits
 
-NetVeil presents one coherent virtual network model rather than independently rewriting unrelated getters:
+NetVeil changes information returned by covered **Java/Android framework APIs** inside scoped app processes. It does not claim to hide every possible network signal.
 
-- exactly one primary package/profile can claim one app process;
-- `system_server` scope is explicitly rejected;
-- framework-native projected `LinkProperties`, `RouteInfo`, `InterfaceAddress`, `NetworkCapabilities`, `WifiInfo` and legacy `NetworkInfo` objects are used where practical;
-- getter, framework `toString()` and covered Parcelable views are derived from the same projected model;
-- CLAT `v4-*` interfaces are collapsed to the underlying physical transport;
-- explicit VPN network requests are suppressed without replacing the genuine active `Network` handle or changing actual traffic routing.
+In particular, an app may still learn about the real connection through native code, direct kernel/procfs/sysfs access, server-side IP checks, latency, geolocation or other signals outside NetVeil's covered API surface.
 
-The authoritative stable-release gate is documented in [`docs/V1-RELEASE-READINESS.md`](docs/V1-RELEASE-READINESS.md).
+For the exact boundary and covered framework surfaces, see [Advanced documentation](README_ADV.md#covered-surfaces-and-hard-boundaries).
 
-## Covered Java/Android surfaces
+## Troubleshooting
 
-### IPv4 / DHCP
+**Nothing changes in an app:** confirm NetVeil is enabled and the app is selected in Vector/LSPosed scope, then force-stop and reopen the app.
 
-- `WifiInfo.getIpAddress()`
-- `WifiInfo.toString()` and covered `writeToParcel()` output
-- `WifiManager.getDhcpInfo()`
-- `LinkProperties.getLinkAddresses()` and aggregate/SystemApi address views where present
-- `NetworkInterface.getInetAddresses()` on the selected presentation interface
-- synthetic `InterfaceAddress` address/prefix/broadcast values for that interface
-- classic socket local IPv4 getters
-- Android libcore NIO channel local-address getters when present
+**The app still shows old values:** the old process may still be running. Force-stop it completely and reopen it.
 
-IPv6 socket address families are preserved. NetVeil does not turn an IPv6 socket into a fake IPv4 socket merely because IPv6 metadata suppression is enabled.
+**An identity will not save:** use **Omit gateway & routes** for an arbitrary IPv4 value. Use **Explicit virtual network** only when the prefix and gateway form a valid subnet.
 
-### Gateway / routes
+**Country refresh fails:** keep using the bundled/cached data. Online refresh requires the configured data endpoint to be anonymously reachable over HTTPS.
 
-In Explicit route mode, NetVeil projects:
+For deeper diagnostics, compatibility notes and test procedures, use the links below.
 
-- DHCP gateway/netmask;
-- `LinkProperties` IPv4 connected/default routes;
-- framework-native synthetic `RouteInfo` objects;
-- selected Android `SystemProperties` gateway metadata.
+## Documentation
 
-In Hidden mode, object-based IPv4 gateway/default-route metadata is omitted. Legacy fixed-width fields use neutral zero/host-only values where an absence cannot be represented directly. DHCP-server metadata remains unknown rather than being invented as the gateway.
-
-### DNS
-
-- `LinkProperties.getDnsServers()`
-- Private-DNS name/activity/validated-server visibility
-- DHCP DNS fields
-- selected Android `SystemProperties` DNS properties
-
-### VPN visibility
-
-- `NetworkCapabilities` VPN transport/capability/transport-info views
-- owner/admin/underlying-network VPN metadata where mutable equivalents exist
-- `NetworkCapabilities.toString()` and covered Parcelable output
-- `ConnectivityManager.getAllNetworks()` VPN-handle filtering while retaining the genuine active handle
-- legacy `NetworkInfo` VPN queries, getters, strings and Parcel views
-- VPN-style `NetworkInterface` enumeration/lookups
-- common always-on/lockdown VPN settings reads
-- explicit `NetworkRequest` registrations/requests for `TRANSPORT_VPN`
-
-VPN-specific `NetworkCapabilities` changes are applied only when the **origin** capability object genuinely has `TRANSPORT_VPN`.
-
-### Proxy visibility
-
-- `LinkProperties.getHttpProxy()`
-- `ConnectivityManager.getDefaultProxy()`
-- common Java proxy system properties
-- selected Android proxy system properties
-
-NetVeil does not replace `ProxySelector`, force `NO_PROXY`, or otherwise change connectivity.
-
-## Presentation interface and Pixel/CLAT behaviour
-
-NetVeil selects one physical presentation interface rather than making every interface claim the same virtual IPv4. Classification distinguishes loopback, Wi-Fi, common Android cellular interfaces, Ethernet, CLAT and VPN/tunnel-style names.
-
-For Android 464XLAT, a `v4-*` CLAT interface is normalised to its underlying physical interface before presentation-transport classification. There is no hard-coded `wlan0` fallback; unresolved presentation state fails open instead of inventing Wi-Fi topology.
-
-## Process and hook lifecycle
-
-NetVeil is app-process-only:
-
-- `system_server` is rejected;
-- only the first package loaded into a process may claim the NetVeil identity;
-- later package loads cannot stack a second profile;
-- required hook installation is transactional and rolls back if incomplete;
-- runtime transformations use protective fail-open behaviour and hook-health diagnostics.
-
-## Important boundary: this does not change the public IP
-
-NetVeil changes only what covered Java/Android APIs report to the scoped app. It does **not** alter Linux routing, modify the real interface configuration, provide a VPN/proxy, rewrite packets, change DNS traffic, or change the public/source IP seen remotely.
-
-## Known hard boundaries
-
-The Java backend does not claim to intercept:
-
-- native `getifaddrs()`;
-- raw netlink;
-- direct `ioctl` interface enumeration;
-- direct `/proc/net/*` or `/sys/class/net/*` reads;
-- native system-property APIs;
-- server-side public-IP, latency or geolocation inference.
-
-A future native/system backend, if added, should remain optional and separately qualified.
-
-## Build and CI
-
-Requirements:
-
-- JDK 17
-- Android SDK 36
-- Android Gradle Plugin 9.3.1
-- Gradle 9.5.0+
-
-The project is Java-only and disables AGP's built-in Kotlin support. Normal CI runs deterministic country-generator/pack tests, JVM tests, unsuppressed `lintRelease`, debug assembly and an ephemeral-signed release build. It verifies the release APK signature, package `dev.ip.netveil`, modern Xposed metadata, bundled country pack, an exact Android permission allow-list, and artifact hashes.
-
-Current intended install-time permissions are:
-
-```text
-android.permission.INTERNET
-android.permission.RECEIVE_BOOT_COMPLETED
-```
-
-`RECEIVE_BOOT_COMPLETED` is required by Android for the optional persisted `JobScheduler` refresh job; no receiver is exported or added for it.
-
-```bash
-gradle --no-daemon :app:testDebugUnitTest :app:lintRelease :app:assembleDebug
-```
-
-## Use
-
-1. Install/open NetVeil.
-2. Configure **All scoped apps (Global)**, usually using route-hidden identities; optionally use a country preset to populate the IPv4 list.
-3. Optionally select an installed/saved app and choose **Inherit Global**, **Custom override**, or **Disable NetVeil for this app**.
-4. Enable NetVeil in Vector/LSPosed and select the actual target apps in framework scope.
-5. Force-stop/restart each affected target process after profile/scope changes or Reroll.
-
-DNS sets use one line per selectable set:
-
-```text
-1.1.1.1, 1.0.0.1
-9.9.9.9, 149.112.112.112
-```
-
-## Stable-release gate
-
-CI success is not physical compatibility evidence. Before a stable release, execute [`docs/V1-RELEASE-READINESS.md`](docs/V1-RELEASE-READINESS.md) and [`docs/DEVICE-TEST-MATRIX.md`](docs/DEVICE-TEST-MATRIX.md), including Android 15/16, Pixel 8/9-class devices, Wi-Fi/cellular/VPN/CLAT states, targetSdk 35/36 probes, multi-process targets, Global/custom/disabled resolution, migration, Parcel consistency, Vector logs and proof that NetVeil does not alter real public egress.
+| Document | Use it for |
+| --- | --- |
+| [Advanced documentation](README_ADV.md) | Architecture, hook coverage, build/CI and contributor details. |
+| [Compatibility](docs/COMPATIBILITY.md) | Supported Android/Vector baseline and compatibility notes. |
+| [Country data](docs/COUNTRY-DATA.md) | Preset generation, filtering, sources and refresh policy. |
+| [Changelog](CHANGELOG.md) | Version history and changes. |
+| [Design notes](docs/DESIGN.md) | Internal design decisions. |
+| [Validation](docs/VALIDATION.md) | Focused engineering validation notes. |
+| [Device test matrix](docs/DEVICE-TEST-MATRIX.md) | Physical Android/Pixel test coverage. |
+| [v1 release readiness](docs/V1-RELEASE-READINESS.md) | Stable-release acceptance gates. |
 
 ## Licence
 
-Apache-2.0.
+NetVeil is licensed under the [Apache License 2.0](LICENSE).
