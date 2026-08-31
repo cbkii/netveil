@@ -4,6 +4,7 @@ from __future__ import annotations
 import argparse
 import importlib.util
 import json
+import os
 import re
 import time
 import urllib.request
@@ -114,11 +115,16 @@ def main() -> int:
     bundled = json.loads(BUNDLED.read_text(encoding="utf-8"))
     generator.validate_pack(bundled)
 
-    remote = fetch_public_pack(url, 6 if args.require_remote_match else 3)
-    if args.require_remote_match and remote != bundled:
+    authoritative_main = (
+        os.environ.get("GITHUB_REF") == "refs/heads/main"
+        and os.environ.get("GITHUB_EVENT_NAME") != "pull_request"
+    )
+    require_remote_match = args.require_remote_match or authoritative_main
+    remote = fetch_public_pack(url, 6 if require_remote_match else 3)
+    if require_remote_match and remote != bundled:
         fail("anonymous public main endpoint does not match the local canonical bundled pack")
 
-    mode = "strict main equality" if args.require_remote_match else "public endpoint validity"
+    mode = "strict main equality" if require_remote_match else "public endpoint validity"
     print(f"country refresh contract: OK ({mode}; {url})")
     return 0
 
