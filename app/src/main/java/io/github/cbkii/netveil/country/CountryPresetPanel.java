@@ -44,6 +44,7 @@ public final class CountryPresetPanel {
     private final TextView status;
     private final Button refresh;
     private CountryPackStore.Loaded loaded;
+    private boolean updatingAutoRefresh;
 
     public CountryPresetPanel(Activity activity, Listener listener) {
         this.activity = activity;
@@ -51,6 +52,10 @@ public final class CountryPresetPanel {
         this.settings = CountryRefreshScheduler.preferences(activity);
         this.ui = new UiFactory(activity);
         this.root = ui.vertical();
+
+        // Re-establish a persisted job before reflecting its state in the switch. Scheduling
+        // failures are contained by CountryRefreshScheduler and disable automatic refresh safely.
+        CountryRefreshScheduler.ensureScheduled(activity);
 
         root.addView(ui.helper(
                 "Adds representative ISP/access-provider IPv4 candidates. Imported identities omit "
@@ -129,23 +134,19 @@ public final class CountryPresetPanel {
             @Override public void onNothingSelected(android.widget.AdapterView<?> parent) {}
         });
         autoRefresh.setOnCheckedChangeListener((buttonView, checked) -> {
-            CountryRefreshScheduler.configure(activity, checked, selectedFrequency());
-            frequency.setEnabled(checked);
-            updateFrequencyVisualState();
+            if (updatingAutoRefresh) return;
+            configureAutomaticRefresh(checked);
         });
         frequency.setOnItemSelectedListener(new android.widget.AdapterView.OnItemSelectedListener() {
             @Override public void onItemSelected(android.widget.AdapterView<?> parent, View view,
                     int position, long id) {
-                if (autoRefresh.isChecked()) {
-                    CountryRefreshScheduler.configure(activity, true, selectedFrequency());
-                }
+                if (autoRefresh.isChecked()) configureAutomaticRefresh(true);
             }
 
             @Override public void onNothingSelected(android.widget.AdapterView<?> parent) {}
         });
         frequency.setEnabled(autoRefresh.isChecked());
         updateFrequencyVisualState();
-        CountryRefreshScheduler.ensureScheduled(activity);
         loadLocal();
     }
 
@@ -182,6 +183,29 @@ public final class CountryPresetPanel {
                 (replace ? "Replaced with " : "Added ") + ips.size() + " "
                         + selectedCountry()
                         + " candidate IPv4 values. Save changes to keep them.");
+    }
+
+    private void configureAutomaticRefresh(boolean requested) {
+        CountryRefreshScheduler.ScheduleResult result = CountryRefreshScheduler.configure(
+                activity, requested, selectedFrequency());
+        boolean actual = CountryRefreshScheduler.enabled(activity);
+        if (autoRefresh.isChecked() != actual) {
+            updatingAutoRefresh = true;
+            try {
+                autoRefresh.setChecked(actual);
+            } finally {
+                updatingAutoRefresh = false;
+            }
+        }
+        frequency.setEnabled(actual);
+        updateFrequencyVisualState();
+        if (!result.success) {
+            String action = requested ? "Automatic refresh could not be enabled: "
+                    : "Automatic refresh was disabled, but the old job could not be cancelled: ";
+            ui.setStatus(status, UiFactory.Tone.WARNING, action + result.error);
+        } else {
+            updateStatus();
+        }
     }
 
     private void refreshNow() {
@@ -239,8 +263,12 @@ public final class CountryPresetPanel {
                 excludeAnonymous.isChecked(), CountryPack.DEFAULT_LIMIT).size();
         String value = count + " candidates after filters · Data " + loaded.pack.generatedAt
                 + " (" + loaded.source + ")";
+        String scheduleError = CountryRefreshScheduler.scheduleError(activity);
         String lastError = settings.getString(CountryRefreshScheduler.KEY_LAST_ERROR, "");
-        if (lastError != null && !lastError.isBlank()) {
+        if (scheduleError != null && !scheduleError.isBlank()) {
+            ui.setStatus(status, UiFactory.Tone.WARNING,
+                    value + "\nAutomatic refresh disabled: " + scheduleError);
+        } else if (lastError != null && !lastError.isBlank()) {
             ui.setStatus(status, UiFactory.Tone.WARNING,
                     value + "\nLast refresh: " + lastError);
         } else {

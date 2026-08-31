@@ -12,26 +12,34 @@ public final class CountryRefreshJobService extends JobService {
 
     @Override
     public boolean onStartJob(JobParameters params) {
+        // A stale persisted job must never run after the user disabled automatic refresh or after
+        // scheduler restoration failed and disabled the preference fail-safe.
+        if (!CountryRefreshScheduler.enabled(this)) return false;
+
         stopped = false;
-        executor = Executors.newSingleThreadExecutor();
-        executor.execute(() -> {
-            CountryPackStore.RefreshResult result = CountryPackStore.refreshBlocking(this);
-            if (stopped) return;
+        ExecutorService localExecutor = Executors.newSingleThreadExecutor();
+        executor = localExecutor;
+        localExecutor.execute(() -> {
+            try {
+                CountryPackStore.RefreshResult result = CountryPackStore.refreshBlocking(this);
+                if (stopped) return;
 
-            var editor = CountryRefreshScheduler.preferences(this).edit();
-            if (result.success) {
-                editor.putString(CountryRefreshScheduler.KEY_LAST_SUCCESS, result.generatedAt)
-                        .remove(CountryRefreshScheduler.KEY_LAST_ERROR);
-            } else {
-                editor.putString(CountryRefreshScheduler.KEY_LAST_ERROR,
-                        result.error == null ? "Refresh failed" : result.error);
+                var editor = CountryRefreshScheduler.preferences(this).edit();
+                if (result.success) {
+                    editor.putString(CountryRefreshScheduler.KEY_LAST_SUCCESS, result.generatedAt)
+                            .remove(CountryRefreshScheduler.KEY_LAST_ERROR);
+                } else {
+                    editor.putString(CountryRefreshScheduler.KEY_LAST_ERROR,
+                            result.error == null ? "Refresh failed" : result.error);
+                }
+                editor.apply();
+
+                // This is already a periodic job. A transient download failure must not create an
+                // extra retry cadence outside the user's Monthly/Weekly/Daily choice.
+                jobFinished(params, false);
+            } finally {
+                localExecutor.shutdown();
             }
-            editor.apply();
-
-            // This is already a periodic job. A transient download failure must not create an
-            // extra retry cadence outside the user's Monthly/Weekly/Daily choice.
-            jobFinished(params, false);
-            executor.shutdown();
         });
         return true;
     }
@@ -39,7 +47,8 @@ public final class CountryRefreshJobService extends JobService {
     @Override
     public boolean onStopJob(JobParameters params) {
         stopped = true;
-        if (executor != null) executor.shutdownNow();
+        ExecutorService current = executor;
+        if (current != null) current.shutdownNow();
         // Keep the configured periodic cadence instead of requesting an immediate/backoff retry.
         return false;
     }

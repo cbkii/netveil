@@ -8,6 +8,7 @@ PKG = "dev.ip.netveil"
 BT = "36.0.0"
 SEMVER = re.compile(r"^[0-9]+\.[0-9]+\.[0-9]+(?:[.-][0-9A-Za-z][0-9A-Za-z.-]*)?$")
 ALLOWED_PERMISSIONS = {
+    "android.permission.ACCESS_NETWORK_STATE",
     "android.permission.INTERNET",
     "android.permission.RECEIVE_BOOT_COMPLETED",
 }
@@ -138,6 +139,8 @@ def signing(root):
     return ks, props
 
 def qualify(root, tag, version, code, signer, aapt):
+    if run([sys.executable, ".github/scripts/test_country_refresh_contract.py"], check=False).returncode:
+        stop("country refresh permission/endpoint contract failed; no release was published")
     if run(["gradle", "--no-daemon", "--stacktrace", "--warning-mode=all", ":app:testDebugUnitTest", ":app:lintRelease", ":app:assembleRelease"], check=False).returncode:
         stop("release tests/lint/build failed; no release was published")
     apk = root / "app/build/outputs/apk/release/app-release.apk"
@@ -248,7 +251,11 @@ def selftest():
     for args,want in cases:
         got = choose_version(*args)
         if got != want: raise AssertionError((args, got, want))
-    if ALLOWED_PERMISSIONS != {"android.permission.INTERNET", "android.permission.RECEIVE_BOOT_COMPLETED"}:
+    if ALLOWED_PERMISSIONS != {
+        "android.permission.ACCESS_NETWORK_STATE",
+        "android.permission.INTERNET",
+        "android.permission.RECEIVE_BOOT_COMPLETED",
+    }:
         raise AssertionError("release permission allow-list changed unexpectedly")
     info(f"manual release planner self-test: {len(cases)} cases passed")
 
