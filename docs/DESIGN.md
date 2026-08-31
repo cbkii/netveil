@@ -2,65 +2,73 @@
 
 ## Core invariant
 
-For a package, every target process must resolve the same immutable virtual network profile from persistent configuration.
+A scoped app process receives at most one immutable NetVeil network profile. All covered Android/Java observations derive from that one resolved profile; hooks do not independently randomise or invent unrelated values.
 
-The profile contains one selected IPv4, one compatible gateway and one selected DNS set. Hook implementations consume that resolved profile; they do not independently randomise values.
+Vector/LSPosed scope is the outer execution gate. NetVeil is app-process-only and rejects `system_server`.
 
-## Observation versus mutation
+## Current configuration model
 
-NetVeil is an observation-layer module.
+The `profiles` preference file uses schema `3` only. Runtime resolution requires that exact schema. The configuration app replaces an incompatible profile store with a fresh schema-3 store rather than maintaining alternate format paths.
 
-It may change returned Java/Android metadata inside a scoped application process. It must not intentionally:
+Policy precedence is:
 
-- modify routing tables;
-- bind the process to a different `Network`;
-- disable a real proxy;
-- establish or tear down a VPN;
-- modify kernel interface state;
-- rewrite packets.
+```text
+Off for this app -> no profile
+Custom           -> package profile
+Use Global       -> Global profile
+no override      -> Global profile
+```
 
-This is why v0.2.1 does not replace `ConnectivityManager.getActiveNetwork()` with an underlying physical network and does not force `ProxySelector.NO_PROXY`.
+A profile contains:
 
-## Whitelist authority
+- enabled state;
+- one or more complete `NetworkIdentity` entries;
+- one or more complete DNS sets;
+- stable selection seed;
+- VPN/proxy/IPv6 visibility policies.
 
-User-entered IPv4, gateway and DNS values are authoritative. Randomisation must select only from those values.
+Randomisation selects whole identities and whole DNS sets. Global derives a package-specific stable seed from the Global seed and package name; Custom uses its own seed.
 
-Derived values are permitted only where required for structural consistency, for example:
+## Network identities
 
-- subnet/network address from IPv4 + prefix;
-- broadcast address from IPv4 + prefix;
-- default route destination `0.0.0.0/0`.
+### Route-hidden
 
-A gateway candidate must share the selected IPv4 subnet and must not equal the client address.
+The normal arbitrary-IPv4 mode contains an IPv4 address with no gateway in the semantic model. No synthetic IPv4 connected/default routes are added to projected `LinkProperties`.
 
-## Multi-process consistency
+Some fixed-width Android structures cannot encode an absent gateway. Translation to their neutral value occurs only at that boundary. The core `Profile.Resolved.gateway` remains null.
 
-The configuration UI stores `selection_seed` per package. Random selection is a deterministic hash of that seed plus a field-specific salt.
+### Explicit virtual network
 
-This avoids process-local randomness. A reroll changes only the stored seed; all target processes must then be restarted before the new profile is authoritative.
+An explicit identity binds IPv4, prefix and gateway together. The gateway must differ from the client IPv4 and share the configured subnet. DHCP, route and property projections consume the same tuple.
 
 ## Presentation interface
 
-Only one non-loopback physical interface is used as the virtual IPv4 presentation surface. The preference order is Wi-Fi, Pixel/common cellular, Ethernet, then another physical interface.
+NetVeil selects one real non-loopback physical presentation interface and classifies Wi-Fi, cellular, Ethernet, CLAT and VPN/tunnel names. CLAT interfaces are normalised to the underlying physical interface. If a safe presentation interface cannot be found, affected transformations fail open instead of fabricating one.
 
-This corrects v0.1 behaviour where multiple physical interfaces could report the same spoofed IPv4.
+## Framework-object projection
 
-## Route masking
+Where practical, NetVeil creates projected framework objects rather than patching unrelated getters independently. `NetworkCapabilities`, `LinkProperties`, `WifiInfo`, route/address objects and deprecated `NetworkInfo` are kept coherent across covered getters, strings and Parcel writes.
 
-Global `RouteInfo` rewriting is unsafe because unrelated route objects may exist in the target process.
+Deprecated `NetworkInfo` remains a supported observation surface on Android 15/16. Its handling is isolated in `NetworkInfoHooks`, including direct VPN query filtering and getter/string/Parcel projection.
 
-v0.2.1 tags route instances only when they are returned from a virtualised `LinkProperties.getRoutes()` / `getAllRoutes()` result. Tagged routes expose a virtual destination, gateway and interface.
+## VPN and proxy masking
 
-`RouteInfo.writeToParcel()` remains an explicit bypass because app-local mutation of hidden backing fields is intentionally avoided.
+VPN masking changes metadata only. The genuine active `Network` handle is retained, and real traffic remains on its existing VPN/physical route. Explicit `TRANSPORT_VPN` requests are suppressed so the request itself does not become a disclosure path.
 
-## VPN hiding
+Proxy masking similarly changes covered metadata without modifying the real proxy selector or routing.
 
-VPN hiding sanitises metadata while preserving connectivity. Covered indicators include transport flags, `NOT_VPN`, selected ownership metadata, legacy VPN `NetworkInfo`, VPN-style interface enumeration/lookups and common always-on/lockdown settings.
+## IPv6
 
-A system-side implementation could sanitise Binder-delivered objects earlier, but it has a larger compatibility and failure domain. It should remain an optional future backend.
+IPv6 suppression is limited to metadata/collection surfaces where absence is valid. Socket address families are preserved.
 
-## Fail-open behaviour
+## Failure behaviour
 
-A hook transformation error returns the original framework result rather than crashing the scoped application. Missing hidden/SystemApi methods are skipped.
+Required hook installation is transactional. An incomplete required hook set is rolled back. Runtime transformation failures are protective and fail open to the original result; logs are therefore part of physical qualification.
 
-This is an availability-first policy and can cause information leakage. Qualification therefore requires LSPosed/Vector log inspection; a clean app experience alone is not sufficient evidence that every requested mask is active.
+## Country data
+
+Country presets are only an input source for ordinary route-hidden identities. The repository owns one canonical pack, bundles it into the APK and serves the same file from public `main`. Refresh is bounded, validated, anti-rollback and process-serialised before atomic cache replacement.
+
+## Non-goals
+
+NetVeil does not mutate kernel routing, establish a VPN, rewrite packets, bind an app to a different network, or claim to mask native/kernel/server-side network observations.

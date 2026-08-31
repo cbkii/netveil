@@ -1,37 +1,37 @@
 # Compatibility
 
-## Intended baseline
+## Maintained baseline
 
-- Android 15 (API 35) and newer
+- Android 15+ installation (`minSdk 35`)
+- Android 16 app behaviour target (`targetSdk 36`, `compileSdk 36`)
 - Google Pixel/AOSP-first qualification
-- arm64 primary target
-- modern libxposed framework API 101+
-- Vector and compatible LSPosed-family frameworks
+- arm64 primary device family
+- libxposed API `102.0.0`
+- `minApiVersion=102`, `targetApiVersion=102`
+- Vector v2.2+ or another framework implementing API 102 correctly
 
-The application `minSdk` is deliberately 35. This avoids pretending that the v0.2.1 hook matrix has been qualified on older Android networking implementations.
+NetVeil does not maintain an API-101 module path. API-102 hot reload is not enabled by current module metadata and is outside the present lifecycle contract.
 
-## libxposed API
+## Android 15 and 16
 
-The module compiles against `io.github.libxposed:api:101.0.1` and advertises API 101. Newer frameworks implementing API 101 compatibility can load it.
+Supporting Android 15 does not use a separate NetVeil implementation. Version-dependent hidden/deprecated Android methods are discovered or installed as optional hooks and fail open when unavailable. Required current surfaces remain release gates.
 
-API 102 is available upstream, but NetVeil does not need its hot-reload/detach additions yet. Raising the declared target would add a framework requirement without improving the current hook implementation.
+The configuration app targets API 36 behaviour while retaining installation on API 35.
 
-## Android 15/16 considerations
+## Deprecated Android APIs
 
-Modern applications can obtain network identity from multiple independent paths. v0.2.1 therefore covers both legacy and modern APIs, including `LinkProperties` aggregate getters and Java socket/NIO local-address reads.
+Deprecation does not imply that an API is unobservable. `NetworkInfo` remains covered where present because applications can still inspect it on supported releases. This coverage is maintained as part of the current Android hook graph.
 
-Hidden/SystemApi methods are discovered reflectively and are best-effort. Method presence can differ between Android branches.
+## Pixel/AOSP interface handling
 
-## Pixel interface naming
+Interface classification recognises common Wi-Fi, cellular, Ethernet, CLAT and VPN/tunnel naming. `v4-*` CLAT interfaces are normalised to an underlying physical interface. There is no hard-coded presentation-interface fallback.
 
-The presentation-interface selector explicitly recognises common Pixel/AOSP cellular names beginning with `rmnet` and prioritises `wlan*` when present.
+Device validation must still record the real interface inventory because OEM/kernel naming can differ.
 
-VPN-style names currently include prefixes such as `tun`, `tap`, `ppp`, `wg`, `ipsec`, `xfrm`, `tailscale`, `zt` and `vpn`.
+## Coexistence with other modules
 
-This list is heuristic. Device testing must verify the actual interface inventory on each target environment.
+Multiple scoped modules can hook the same network methods. Establish a NetVeil-only baseline first, then enable complementary features. Overlapping network spoofing should be treated as an explicit hook-order compatibility test rather than assumed to compose.
 
-## Coexistence
+## Configuration compatibility boundary
 
-NetVeil should be tested with other scoped privacy modules such as XPL-EX because multiple modules may hook the same framework methods. Hook ordering can affect which result is ultimately visible.
-
-For qualification, disable overlapping XPL-EX network spoofing for the same target first, establish the NetVeil baseline, then re-enable only the desired complementary XPL-EX functions.
+Only profile schema 3 is current. Incompatible NetVeil profile preferences are replaced with an empty current store when the configuration app is opened; injected processes do not interpret them. Country-data cache and refresh settings are separate from this profile store.

@@ -1,182 +1,144 @@
 # Device test matrix
 
-Use this checklist as the hands-on execution sheet for the authoritative stable-release contract in [`V1-RELEASE-READINESS.md`](V1-RELEASE-READINESS.md). Record the exact APK hash, source commit, framework version and Android build for every run.
+Use this as the physical runtime sheet for [RELEASE-READINESS.md](RELEASE-READINESS.md). Record source SHA, APK SHA-256, Android build and framework version for every run.
 
-## Baseline state
+## Baseline
 
-- [ ] Confirm NetVeil framework scope contains only the intended target applications.
-- [ ] Confirm the NetVeil app opens on **All scoped apps (Global)** by default.
-- [ ] Confirm the target selector shows Global, saved/custom entries, and launchable installed apps without `QUERY_ALL_PACKAGES`.
-- [ ] Confirm manual package entry remains usable for packages not shown by launcher visibility.
-- [ ] Confirm overlapping network spoofing from other scoped modules is disabled for the initial baseline.
-- [ ] Record Android build fingerprint/security patch.
-- [ ] Record Vector/LSPosed version and libxposed API compatibility.
-- [ ] Record actual interface inventory before testing.
-- [ ] Record NetVeil source SHA and APK SHA-256.
+- [ ] NetVeil source and APK hashes recorded.
+- [ ] Android build fingerprint/security patch recorded.
+- [ ] Vector version is v2.2+ and API-102 module loading is confirmed.
+- [ ] Intended target apps only are scoped.
+- [ ] Real interface inventory is recorded before masking.
+- [ ] Overlapping network-spoofing hooks from other modules are disabled for the baseline.
+
+## Current profile schema
+
+- [ ] A fresh install initialises the current profile store.
+- [ ] An absent/mismatched profile schema produces no effective profile in an injected process.
+- [ ] Opening NetVeil with incompatible profile preferences replaces only the `profiles` store with an empty current store.
+- [ ] Country-data cache and automatic-refresh settings are unaffected by that profile-store reset.
+- [ ] No incompatible profile values are translated into current identities or policies.
 
 ## Global and per-app resolution
 
-Create a valid Global profile, then exercise at least two scoped target packages.
+Create a valid Global profile and exercise at least two scoped packages.
 
-- [ ] An app with no saved override resolves Global.
-- [ ] `INHERIT_GLOBAL` resolves Global.
-- [ ] `CUSTOM` resolves the package-specific profile instead of Global.
-- [ ] `DISABLED` installs no NetVeil profile hooks for that package even though it remains in Vector/LSPosed scope.
-- [ ] Removing a package override returns it to Global inheritance.
-- [ ] Disabling/resetting Global does not overwrite retained Custom profiles.
-- [ ] A package outside Vector/LSPosed scope is unaffected regardless of Global configuration.
-- [ ] a later package loaded into an already-claimed process cannot install a second profile.
+- [ ] A package with no per-app mode uses Global.
+- [ ] **Use Global** uses Global.
+- [ ] **Custom** uses the package-specific profile.
+- [ ] **Off for this app** installs no NetVeil profile hooks.
+- [ ] Removing an override returns the package to Global.
+- [ ] A package outside framework scope remains unaffected.
+- [ ] A later package loaded into an already-claimed process cannot install a second NetVeil identity.
 
-## Route-hidden identity — default
+## Route-hidden identity
 
-Configure one route-hidden IPv4 and one DNS set. Do **not** enter a prefix/gateway.
+Configure one IPv4 identity with **Omit gateway & routes** and one DNS set.
 
-- [ ] UI saves successfully without the old `/0` workaround.
-- [ ] `WifiInfo` getter/string/Parcel views agree on the configured IPv4 when applicable.
-- [ ] `DhcpInfo` reports the configured IPv4/DNS and neutral fixed-width gateway/host-mask metadata rather than inventing a LAN gateway.
-- [ ] `LinkProperties` getter/string/Parcel views expose the configured IPv4/DNS/interface/proxy state.
-- [ ] projected `LinkProperties` contain no synthetic IPv4 connected route or default gateway route.
-- [ ] selected presentation `NetworkInterface` reports virtual IPv4.
-- [ ] lookup by the fake IPv4 returns the selected presentation interface.
-- [ ] loopback remains loopback.
-- [ ] unrelated physical interfaces do not all inherit the virtual IPv4.
-- [ ] classic/NIO local IPv4 socket getters report the virtual IPv4.
-- [ ] IPv6 sockets retain an IPv6 address family.
+- [ ] Profile saves without a gateway.
+- [ ] Effective core profile has no gateway value.
+- [ ] `WifiInfo` getter/string/Parcel views agree on the configured IPv4 where applicable.
+- [ ] `DhcpInfo` uses configured IPv4/DNS and a neutral zero gateway value.
+- [ ] Android string gateway-property getters return their supplied/default absence value rather than `0.0.0.0`.
+- [ ] `LinkProperties` exposes the configured IPv4/DNS but no synthetic IPv4 connected/default route.
+- [ ] Selected presentation `NetworkInterface` exposes the virtual IPv4.
+- [ ] Classic/NIO local IPv4 getters expose the virtual IPv4.
+- [ ] IPv6 sockets retain IPv6 address family.
 
 ## Explicit virtual network
 
-Configure a coherent LAN identity such as `192.168.50.20/24` via `192.168.50.1`.
+Configure `192.168.50.20/24` via `192.168.50.1`.
 
-- [ ] UI accepts a different same-subnet gateway.
-- [ ] UI rejects gateway == client IPv4.
-- [ ] UI rejects an out-of-subnet gateway with an actionable inline error.
-- [ ] `/0` remains technically accepted but displays the explicit whole-IPv4-space warning.
-- [ ] `/31` peer addressing behaves according to the configured prefix model.
-- [ ] `/32` does not accept a different gateway as same-subnet.
-- [ ] `DhcpInfo` reports configured IPv4/gateway/DNS and derived mask; DHCP server remains unknown.
-- [ ] `LinkProperties` exposes the configured connected/default IPv4 routes coherently.
-- [ ] synthetic `RouteInfo` objects agree with getter/string/Parcel projections.
+- [ ] UI accepts the coherent tuple.
+- [ ] Gateway equal to client IPv4 is rejected.
+- [ ] Out-of-subnet gateway is rejected.
+- [ ] `/0`, `/31` and `/32` edge behaviour matches validation semantics.
+- [ ] DHCP gateway/netmask and projected routes agree with the explicit identity.
+- [ ] Getter/string/Parcel views of projected route/link objects agree.
 
 ## Stable randomisation
 
-Configure at least three complete NetworkIdentity entries and three DNS sets in Global.
+- [ ] Multiple identities and DNS sets always resolve as complete configured units.
+- [ ] One package remains stable across process restarts until reroll.
+- [ ] Two inheriting packages can derive different stable selections from Global.
+- [ ] Global reroll affects inheriting packages after process restart.
+- [ ] Custom reroll affects only that package.
 
-- [ ] all processes of one target package report the same selected identity/DNS set.
-- [ ] restarting a process without rerolling keeps the same selection.
-- [ ] two different inheriting packages derive independent package seeds from the same Global base seed.
-- [ ] selections contain only configured whole identities and whole DNS sets.
-- [ ] Global Reroll changes the base seed and changes only to configured values after inheriting processes are restarted.
-- [ ] a Custom package profile keeps its own seed and is unaffected by Global Reroll.
-- [ ] Custom Reroll affects only that package profile.
+## VPN visibility
 
-## Legacy-profile migration
+Test without and with the normal VPN active.
 
-Use a preference snapshot/profile from the pre-Global v1.0.x format.
+- [ ] Raw VPN `NetworkCapabilities` is projected without VPN transport indicators.
+- [ ] Non-VPN capabilities remain unchanged except for independently configured features.
+- [ ] `getAllNetworks()` does not disclose non-active VPN handles while preserving the real active handle needed for connectivity.
+- [ ] Direct `TRANSPORT_VPN` network requests are suppressed.
+- [ ] VPN-style interface enumeration/lookups are hidden when requested.
+- [ ] Selected always-on/lockdown Settings values are hidden.
+- [ ] Real traffic continues over the real VPN.
+- [ ] Remote public-IP check confirms NetVeil did not reroute traffic.
 
-- [ ] Existing package profile defaults to `CUSTOM`, preserving its prior precedence.
-- [ ] An IPv4 with exactly one compatible legacy gateway migrates to an Explicit identity.
-- [ ] An IPv4 with no compatible gateway migrates to route-hidden rather than being rejected.
-- [ ] An IPv4 with multiple compatible legacy gateways migrates to route-hidden rather than guessing.
-- [ ] The previously observed `/0` workaround with ambiguous gateways loads as route-hidden identities.
-- [ ] Saving the migrated profile writes the structured identity format.
-- [ ] legacy fields remain available until explicit reset/remove for rollback/debug inspection.
+## Deprecated NetworkInfo coverage
 
-## VPN hiding
+- [ ] Direct VPN-type `getNetworkInfo` query returns no VPN result.
+- [ ] `getAllNetworkInfo` omits raw VPN entries.
+- [ ] Direct VPN-type network-handle query is hidden.
+- [ ] Active/raw VPN `NetworkInfo` type/name/extra-info views present the selected physical transport.
+- [ ] `toString()` agrees with those getters.
+- [ ] Parcel round-trip agrees with getters/string and does not corrupt the destination Parcel on projection failure.
+- [ ] With VPN hiding disabled, these surfaces pass through.
 
-Test once without a VPN and once with the normal VPN active.
+## Proxy and properties
 
-- [ ] `hasTransport(TRANSPORT_VPN)` is false in the scoped app only for raw VPN capability objects.
-- [ ] VPN transport is absent from projected `getTransportTypes()`.
-- [ ] `NET_CAPABILITY_NOT_VPN` is present in the projected VPN capability object.
-- [ ] `VpnTransportInfo`, VPN owner/admin metadata and underlying-network metadata are hidden where those APIs exist.
-- [ ] non-VPN `NetworkCapabilities` objects retain their original ownership/admin metadata.
-- [ ] active raw-VPN legacy `NetworkInfo` getter/string/Parcel views present the physical transport.
-- [ ] direct legacy VPN network queries return no VPN entry.
-- [ ] VPN-style interfaces are absent from covered Java enumeration/lookups.
-- [ ] explicit `NetworkRequest(TRANSPORT_VPN)` callback/request registration does not disclose a VPN.
-- [ ] unregistering a callback/PendingIntent whose VPN request was suppressed is harmless.
-- [ ] always-on/lockdown VPN settings are not exposed through covered Settings getters.
-- [ ] actual traffic still traverses the real VPN when enabled.
-- [ ] remote public-IP test reports the real VPN exit, proving NetVeil did not reroute traffic.
+- [ ] Java proxy properties are hidden with correct one/two-argument default semantics.
+- [ ] Selected Android proxy properties are hidden without changing real routing.
+- [ ] Route-hidden Android gateway property uses the caller/default value.
+- [ ] Explicit-route Android gateway property exposes the configured gateway.
+- [ ] DNS/IP property projections match the effective profile.
 
-## Proxy hiding
+## Wi-Fi, cellular and CLAT
 
-- [ ] Java proxy system properties are hidden and two-argument calls return the caller-supplied default.
-- [ ] selected Android proxy properties are hidden with correct default semantics.
-- [ ] `LinkProperties.getHttpProxy()` is hidden.
-- [ ] `ConnectivityManager.getDefaultProxy()` is hidden.
-- [ ] actual proxy/VPN connectivity continues unchanged.
-
-## Wi-Fi / cellular / CLAT
-
-- [ ] test while Wi-Fi is primary.
-- [ ] test while cellular is primary.
-- [ ] test transition Wi-Fi -> cellular with a full target-app restart.
-- [ ] verify presentation interface selection is plausible on the Pixel build.
-- [ ] on IPv6-only cellular/464XLAT, verify `v4-rmnet*` is collapsed to the underlying cellular transport rather than presented as Wi-Fi.
-- [ ] where CLAT exists on Wi-Fi, verify `v4-wlan*` resolves to Wi-Fi.
+- [ ] Wi-Fi primary.
+- [ ] Cellular primary.
+- [ ] Wi-Fi -> cellular after full target-process restart.
+- [ ] Presentation interface selection matches the actual Pixel interface inventory.
+- [ ] Cellular `v4-rmnet*` CLAT collapses to cellular where present.
+- [ ] Wi-Fi CLAT collapses to Wi-Fi where present.
 
 ## IPv6
 
-- [ ] with IPv6 suppression enabled, collection/metadata surfaces where absence is valid do not expose real IPv6 addresses/prefixes.
-- [ ] with suppression disabled, IPv6 passthrough does not break IPv4 spoofing.
-- [ ] IPv6 socket local-address getters never return a fabricated IPv4 socket identity.
+- [ ] With suppression enabled, covered metadata collections omit real IPv6 addresses where absence is valid.
+- [ ] With suppression disabled, IPv6 passthrough coexists with IPv4 projection.
+- [ ] IPv6 socket getters never return a fabricated IPv4 address.
+
+## Country data
+
+- [ ] AU/US/GB/ID/FR produce candidates with default filters.
+- [ ] **Add to list** deduplicates while preserving manual identities.
+- [ ] **Replace list** changes only the draft identity list.
+- [ ] Imported values remain route-hidden and do not invent gateways.
+- [ ] Bundled data works offline.
+- [ ] **Refresh now** performs a real online request and reports Updated or Online data already current.
+- [ ] Successful online data is validated before atomic cache replacement.
+- [ ] Malformed/oversized/older/conflicting data leaves the previous valid data intact.
+- [ ] Manual and periodic refresh cannot race one another over the cache/temp file.
+- [ ] Automatic refresh is off by default and persists the selected Monthly/Weekly/Daily cadence when enabled.
+- [ ] Refresh changes only country-data cache, never saved profiles.
 
 ## Configuration UX
 
-- [ ] Global is first/default selector entry.
-- [ ] saved/manual custom packages remain selectable after app restart.
-- [ ] launchable installed apps display human-readable labels and package names.
-- [ ] editing selector text to a different package cannot accidentally save current Global/custom form data under the wrong target.
-- [ ] inline errors persist long enough to diagnose; configuration problems are not Toast-only.
-- [ ] Save scrolls/focuses the first invalid identity/DNS control.
-- [ ] resolved preview agrees with the effective Global/Custom/Disabled policy.
-- [ ] Android 15/16 edge-to-edge, gesture navigation, three-button navigation, landscape and large display/font scaling remain usable.
+- [ ] Global is the default target.
+- [ ] Saved and launchable targets are visible without `QUERY_ALL_PACKAGES`.
+- [ ] Manual package entry works.
+- [ ] Editing target text cannot silently save the visible form under another package.
+- [ ] Inline errors and first-invalid-field focus are usable.
+- [ ] Edge-to-edge, cutout, gesture/three-button navigation, landscape and large font/display scaling remain usable.
 
-## Country IPv4 presets and refresh
+## Expected disclosures
 
-Exercise the feature once on Global and once on a Custom override. Country presets are a configuration population source, not a separate runtime hook path.
+Record these as expected boundaries rather than Java-backend failures:
 
-- [ ] AU, US, GB, ID and FR each produce at least one candidate with the default filters.
-- [ ] **Exclude medium/low-confidence providers** is enabled by default and relaxing it can add eligible lower-confidence candidates without altering other profile settings.
-- [ ] **Exclude known VPN / proxy / Tor addresses** is enabled by default and its opt-out affects only country candidate selection.
-- [ ] **Add to list** preserves existing manual identities, canonicalises/deduplicates candidates and imports them as route-hidden identities.
-- [ ] **Replace list** changes only network identities; DNS/privacy/randomisation/profile policy remain untouched until the normal Save action.
-- [ ] imported identities never invent an ISP gateway/prefix and save without the historical `/0` workaround.
-- [ ] bundled data works with airplane mode/no network.
-- [ ] **Refresh country data now** is asynchronous and does not block the main UI thread.
-- [ ] successful refresh validates and atomically replaces only the app-private cache, then updates the displayed data timestamp/source.
-- [ ] malformed, oversized, stale, unsupported-schema or non-public-address remote data is rejected and the previous valid pack remains usable.
-- [ ] HTTP/TLS/endpoint failure leaves the existing cached/bundled data usable and shows a persistent last-refresh warning.
-- [ ] automatic refresh is disabled by default; enabling it defaults to Monthly and allows Weekly/Daily.
-- [ ] background refresh changes only the country-data cache and does not rewrite saved profile identities.
-- [ ] reboot with automatic refresh enabled retains the persisted JobScheduler cadence; with it disabled no country refresh job is active.
-- [ ] refresh failures do not create extra retry cadence beyond the selected periodic schedule.
-- [ ] if the configured pack endpoint is not anonymously readable, offline country presets remain usable and the limitation is reported as refresh failure rather than profile failure.
-
-## Multi-module coexistence
-
-- [ ] establish NetVeil-only baseline.
-- [ ] enable desired non-network features in another scoped privacy module.
-- [ ] inspect target output again for hook-order regressions.
-- [ ] deliberately enable overlapping network hooks and record which module owns any differing return value.
-- [ ] inspect Vector/LSPosed logs for NetVeil required-hook failures or protective fallbacks.
-
-## CI/framework-object consistency
-
-- [ ] debug and ephemeral-signed release APKs build successfully from the same source head.
-- [ ] release APK signature/package/Xposed metadata/permission checks pass.
-- [ ] bundled country pack is present in the APK and validates against the same schema/permission/source policy used by CI.
-- [ ] `WifiInfo`, `NetworkCapabilities`, `LinkProperties` and legacy `NetworkInfo` Parcel round-trips agree with their getter/string projections.
-- [ ] no custom NetVeil-only `toString()` format is observable for projected Android framework objects.
-
-## Expected native/server disclosures
-
-These remain outside the Java backend and are expected to expose real state where the platform permits them:
-
-- [ ] native `getifaddrs()`;
-- [ ] raw netlink/ioctl interface or route queries;
-- [ ] direct `/proc/net/*` reads;
-- [ ] direct `/sys/class/net/*` reads;
-- [ ] native system-property APIs;
-- [ ] server-side public-IP, latency or geolocation inference.
+- [ ] native `getifaddrs`;
+- [ ] raw netlink/ioctl;
+- [ ] direct procfs/sysfs reads where allowed;
+- [ ] native system properties;
+- [ ] server-side public IP, ASN, latency or geolocation inference.

@@ -9,6 +9,7 @@ on:
       - '.github/scripts/generate_country_pack.py'
       - '.github/scripts/test_generate_country_pack.py'
       - '.github/scripts/test_country_refresh_contract.py'
+      - '.github/scripts/test_repository_policy.py'
       - '.github/workflows/update-country-data.yml'
       - 'app/src/main/AndroidManifest.xml'
       - 'app/src/main/assets/country-ip-pack.json'
@@ -39,14 +40,16 @@ jobs:
         with:
           python-version: '3.13'
 
-      - name: Validate generator, canonical pack and public refresh contract
+      - name: Validate repository, generator, canonical pack and public refresh contract
         shell: bash
         run: |
           set -euo pipefail
           python3 -m py_compile \
+            .github/scripts/test_repository_policy.py \
             .github/scripts/generate_country_pack.py \
             .github/scripts/test_generate_country_pack.py \
             .github/scripts/test_country_refresh_contract.py
+          python3 .github/scripts/test_repository_policy.py
           python3 .github/scripts/generate_country_pack.py --self-test
           python3 .github/scripts/test_generate_country_pack.py
           python3 .github/scripts/test_country_refresh_contract.py
@@ -64,7 +67,6 @@ jobs:
             printf 'live_ok=false\n' >> "$GITHUB_OUTPUT"
           fi
 
-          # The checked-in canonical pack must remain valid even when every live source is unavailable.
           python3 .github/scripts/test_generate_country_pack.py || {
             printf 'ERROR: the canonical country-data pack is invalid.\n' >&2
             exit 1
@@ -223,7 +225,7 @@ jobs:
           if [[ "$CHANGED" == 'true' ]]; then
             immutable="https://raw.githubusercontent.com/cbkii/netveil/${COMMIT_SHA}/${path}?run=${GITHUB_RUN_ID}"
             verified=0
-            for attempt in 1 2 3 4; do
+            for _ in 1 2 3 4; do
               if curl --fail --silent --show-error --location \
                   --connect-timeout 8 --max-time 20 \
                   -H 'Accept: application/json' \
@@ -242,7 +244,6 @@ jobs:
             cp "$generated" "$canonical"
           fi
 
-          # The stable URL is what installed applications use. Bounded retries absorb CDN lag.
           python3 .github/scripts/test_country_refresh_contract.py --require-remote-match
 
       - name: Summary
