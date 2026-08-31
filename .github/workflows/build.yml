@@ -84,7 +84,11 @@ jobs:
             printf 'ERROR: deterministic country generator/bundled-pack tests failed.\n' >&2
             failed=$((failed + 1))
           fi
-          if ! python3 .github/scripts/test_country_refresh_contract.py; then
+          contract_args=()
+          if [[ "${GITHUB_EVENT_NAME:-}" == "push" && "${GITHUB_REF:-}" == "refs/heads/main" ]]; then
+            contract_args+=(--require-remote-match)
+          fi
+          if ! python3 .github/scripts/test_country_refresh_contract.py "${contract_args[@]}"; then
             printf 'ERROR: country refresh permission/endpoint contract failed.\n' >&2
             failed=$((failed + 1))
           fi
