@@ -1,0 +1,151 @@
+name: Update Country Data
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '23 3 * * *'
+  pull_request:
+    paths:
+      - '.github/scripts/generate_country_pack.py'
+      - '.github/scripts/test_generate_country_pack.py'
+      - '.github/workflows/update-country-data.yml'
+      - 'app/src/main/assets/country-ip-pack.json'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: netveil-country-data-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  live-check:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    outputs:
+      live_ok: ${{ steps.generate.outputs.live_ok }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.13'
+
+      - name: Validate generator and current fallback pack
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m py_compile \
+            .github/scripts/generate_country_pack.py \
+            .github/scripts/test_generate_country_pack.py
+          python3 .github/scripts/generate_country_pack.py --self-test
+          python3 .github/scripts/test_generate_country_pack.py
+
+      - name: Regenerate from live public routing/provider sources
+        id: generate
+        shell: bash
+        run: |
+          set -uo pipefail
+          output='app/src/main/assets/country-ip-pack.json'
+          if python3 .github/scripts/generate_country_pack.py --output "$output"; then
+            printf 'live_ok=true\n' >> "$GITHUB_OUTPUT"
+          else
+            printf '::warning::Live country-data regeneration failed; retaining the last validated bundled pack.\n'
+            printf 'live_ok=false\n' >> "$GITHUB_OUTPUT"
+          fi
+
+          # The existing/bundled pack must remain valid even if every live source is unavailable.
+          python3 .github/scripts/test_generate_country_pack.py || {
+            printf 'ERROR: no valid country-data pack remains after generation attempt.\n' >&2
+            exit 1
+          }
+
+      - name: Upload generated pack for audit/update handoff
+        if: steps.generate.outputs.live_ok == 'true'
+        uses: actions/upload-artifact@v6
+        with:
+          name: netveil-country-pack-${{ github.run_id }}
+          path: app/src/main/assets/country-ip-pack.json
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Summary
+        if: always()
+        shell: bash
+        env:
+          LIVE_OK: ${{ steps.generate.outputs.live_ok }}
+        run: |
+          result="${LIVE_OK:-not-run}"
+          {
+            printf '## Country data live check\n\n'
+            printf -- '- Live regeneration: `%s`\n' "$result"
+            printf -- '- Countries: `AU US GB ID FR`\n'
+            printf -- '- PR validation uses read-only repository permissions.\n'
+            printf -- '- Existing validated pack remains authoritative when optional/live sources fail.\n'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  update:
+    if: github.event_name != 'pull_request' && needs.live-check.outputs.live_ok == 'true'
+    needs: live-check
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          persist-credentials: true
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.13'
+
+      - name: Download validated live pack
+        uses: actions/download-artifact@v6
+        with:
+          name: netveil-country-pack-${{ github.run_id }}
+          path: generated-country-pack
+
+      - name: Validate and commit changed pack
+        shell: bash
+        run: |
+          set -euo pipefail
+          generated='generated-country-pack/country-ip-pack.json'
+          output='app/src/main/assets/country-ip-pack.json'
+          test -s "$generated" || {
+            printf 'ERROR: validated generated pack artifact is missing.\n' >&2
+            exit 1
+          }
+          cp "$generated" "$output"
+          python3 .github/scripts/test_generate_country_pack.py
+
+          if git diff --quiet -- "$output"; then
+            printf 'Country candidate data is unchanged; no commit required.\n'
+            exit 0
+          fi
+
+          branch="$GITHUB_REF_NAME"
+          if [[ "$GITHUB_REF_TYPE" != 'branch' || -z "$branch" ]]; then
+            printf 'ERROR: updater must run from a branch; ref type is %s.\n' "$GITHUB_REF_TYPE" >&2
+            exit 1
+          fi
+          start_sha="$(git rev-parse HEAD)"
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -- "$output"
+          git commit -m 'chore(data): refresh country IP candidates'
+          git push --force-with-lease="refs/heads/${branch}:${start_sha}" origin "HEAD:${branch}"
+
+      - name: Summary
+        if: always()
+        shell: bash
+        run: |
+          {
+            printf '## Country data repository update\n\n'
+            printf -- '- Source artifact came from this run\x27s read-only live-check job.\n'
+            printf -- '- Write permission is confined to this scheduled/manual update job.\n'
+          } >> "$GITHUB_STEP_SUMMARY"

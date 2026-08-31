@@ -33,6 +33,7 @@ import io.github.cbkii.netveil.config.ConfigKeys;
 import io.github.cbkii.netveil.config.Ipv4;
 import io.github.cbkii.netveil.config.NetworkIdentity;
 import io.github.cbkii.netveil.config.Profile;
+import io.github.cbkii.netveil.country.CountryPresetPanel;
 
 import java.security.SecureRandom;
 import java.util.ArrayList;
@@ -176,6 +177,10 @@ public final class MainActivity extends Activity {
         });
         profileBody.addView(addIdentity);
 
+        profileBody.addView(section("Country IPv4 preset"));
+        CountryPresetPanel countryPresetPanel = new CountryPresetPanel(this, this::applyCountryPreset);
+        profileBody.addView(countryPresetPanel.view());
+
         profileBody.addView(section("DNS"));
         profileBody.addView(label("DNS sets"));
         profileBody.addView(helper(
@@ -234,6 +239,35 @@ public final class MainActivity extends Activity {
         selectTarget(ConfigKeys.GLOBAL);
         setContentView(scroll);
         scroll.requestApplyInsets();
+    }
+
+    private void applyCountryPreset(List<String> ipv4Values, boolean replace) {
+        if (ipv4Values == null || ipv4Values.isEmpty()) return;
+        if (replace) {
+            identityEditors.clear();
+            identitiesContainer.removeAllViews();
+        } else {
+            List<IdentityEditor> blanks = new ArrayList<>();
+            for (IdentityEditor editor : identityEditors) if (editor.isBlank()) blanks.add(editor);
+            for (IdentityEditor editor : blanks) {
+                identityEditors.remove(editor);
+                identitiesContainer.removeView(editor.container);
+            }
+        }
+
+        Set<String> existing = new LinkedHashSet<>();
+        for (IdentityEditor editor : identityEditors) {
+            String raw = editor.ip.getText().toString().trim();
+            if (Ipv4.isLiteral(raw)) existing.add(Ipv4.canonical(raw));
+        }
+        for (String raw : ipv4Values) {
+            if (!Ipv4.isLiteral(raw)) continue;
+            String canonical = Ipv4.canonical(raw);
+            if (existing.add(canonical)) addIdentityEditor(NetworkIdentity.hidden(canonical));
+        }
+        if (identityEditors.isEmpty()) addIdentityEditor(null);
+        refreshIdentityHeadings();
+        validateAndPreview();
     }
 
     private void refreshTargets() {
@@ -443,11 +477,6 @@ public final class MainActivity extends Activity {
         toast("Saved. Restart scoped app process(es) to apply.");
     }
 
-    /**
-     * Reconcile editable selector text with the loaded model before any write.
-     * A changed target is loaded first; the user must review it and press Save again. This prevents
-     * unsaved Global/custom form contents being accidentally written under a newly typed package.
-     */
     private boolean resolveManualTargetIfNeeded() {
         String raw = targetField.getText().toString().trim();
         TargetEntry current = findTarget(selectedTarget);

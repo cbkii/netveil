@@ -9,9 +9,12 @@ It is not a general device-spoofing framework and does not reroute traffic. NetV
 - whitelisted DNS sets;
 - VPN visibility hiding;
 - proxy visibility hiding;
-- optional IPv6 suppression on covered Java/Android metadata surfaces.
+- optional IPv6 suppression on covered Java/Android metadata surfaces;
+- optional country/provider presets that populate the same IPv4 whitelist model.
 
-NetVeil has no Internet permission, VPN service, root daemon, analytics, advertising SDK, Compose stack or AndroidX UI dependency. It does not change the public/source IP observed by remote servers.
+NetVeil has no VPN service, root daemon, analytics, advertising SDK, Compose stack or AndroidX UI dependency. It does not change the public/source IP observed by remote servers.
+
+The configuration app requests Android `INTERNET` only to refresh NetVeil's small public country/provider candidate database. It does **not** upload profiles, installed-app lists, selected spoofed values, device identifiers, Vector/LSPosed scope, analytics or telemetry. Automatic refresh is off by default.
 
 ## Scope and profile model
 
@@ -128,6 +131,48 @@ The configuration screen uses platform Android widgets only. It provides:
 
 If the editable target text is changed directly, Save first loads that target and requires a second explicit Save after review. This prevents unsaved Global/custom form contents from being accidentally written under a newly typed package.
 
+## Country ISP IPv4 presets
+
+NetVeil can populate the current profile's IPv4 identities from a deliberately small country/provider candidate pack for:
+
+- Australia;
+- United States;
+- United Kingdom;
+- Indonesia;
+- France.
+
+The ordinary UI remains intentionally simple:
+
+```text
+Country
+[ Australia ▼ ]
+
+☑ Exclude medium/low-confidence providers
+☑ Exclude known VPN / proxy / Tor addresses
+
+[ Add to list ]  [ Replace list ]
+```
+
+There is no per-ISP/ASN picker. Imported values become ordinary **route-hidden** `NetworkIdentity` entries, so NetVeil never guesses an ISP gateway or forces a public candidate into a fabricated LAN prefix.
+
+The pack is generated repository-side from public routing/allocation/provider evidence, including the relevant RIR delegated statistics and current RouteViews origins, with limited PeeringDB classification corroboration and optional Tor/X4B/monosans exclusion intelligence. Candidate IPs are never pinged, scanned or contacted.
+
+The labels are deliberately conservative: these are **consumer/access-provider candidate addresses**, not verified residential subscribers and not guaranteed non-VPN addresses. The default anonymity filter means only “no known VPN/proxy/Tor match in the current exclusion data”.
+
+The app uses this fallback order:
+
+1. valid refreshed cache;
+2. valid previous cache;
+3. bundled APK pack.
+
+**Refresh country data now** downloads one bounded HTTPS NetVeil pack and validates it before replacing the app-private cache. A failed refresh leaves the previous valid/bundled data intact and never prevents ordinary manual profile use.
+
+Automatic refresh is **off by default**. When explicitly enabled it defaults to **Monthly**, with Weekly and Daily options. Platform `JobScheduler` is used instead of AndroidX/WorkManager. Automatic refresh only updates the cached country database; it does not silently alter any saved IPv4 profile.
+
+The online pack URL must be anonymously HTTPS-readable. If the repository/data endpoint is private or unavailable, online refresh fails safely and bundled/cached country data continues to work.
+
+See [`docs/COUNTRY-DATA.md`](docs/COUNTRY-DATA.md) for generation rules, source attribution/terms, confidence/exclusion semantics and maintenance policy.
+
 ## v1 network-projection architecture
 
 NetVeil presents one coherent virtual network model rather than independently rewriting unrelated getters:
@@ -238,7 +283,16 @@ Requirements:
 - Android Gradle Plugin 9.3.1
 - Gradle 9.5.0+
 
-The project is Java-only and disables AGP's built-in Kotlin support. Normal CI runs JVM tests, unsuppressed `lintRelease`, debug assembly and an ephemeral-signed release build. It verifies the release APK signature, package `dev.ip.netveil`, modern Xposed metadata, absence of `android.permission.INTERNET`, and artifact hashes.
+The project is Java-only and disables AGP's built-in Kotlin support. Normal CI runs deterministic country-generator/pack tests, JVM tests, unsuppressed `lintRelease`, debug assembly and an ephemeral-signed release build. It verifies the release APK signature, package `dev.ip.netveil`, modern Xposed metadata, bundled country pack, an exact Android permission allow-list, and artifact hashes.
+
+Current intended install-time permissions are:
+
+```text
+android.permission.INTERNET
+android.permission.RECEIVE_BOOT_COMPLETED
+```
+
+`RECEIVE_BOOT_COMPLETED` is required by Android for the optional persisted `JobScheduler` refresh job; no receiver is exported or added for it.
 
 ```bash
 gradle --no-daemon :app:testDebugUnitTest :app:lintRelease :app:assembleDebug
@@ -247,7 +301,7 @@ gradle --no-daemon :app:testDebugUnitTest :app:lintRelease :app:assembleDebug
 ## Use
 
 1. Install/open NetVeil.
-2. Configure **All scoped apps (Global)**, usually using route-hidden identities.
+2. Configure **All scoped apps (Global)**, usually using route-hidden identities; optionally use a country preset to populate the IPv4 list.
 3. Optionally select an installed/saved app and choose **Inherit Global**, **Custom override**, or **Disable NetVeil for this app**.
 4. Enable NetVeil in Vector/LSPosed and select the actual target apps in framework scope.
 5. Force-stop/restart each affected target process after profile/scope changes or Reroll.

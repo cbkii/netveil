@@ -13,6 +13,15 @@
 - Add persistent field labels, inline identity/DNS validation, resolved-profile preview, invalid-field focus/scroll, and safer target switching so editable selector text cannot silently retarget unsaved form data.
 - Keep direct in-app Vector/LSPosed scope management out of the API-101 baseline because the current official `libxposed/service` line is API 102; framework Manager remains the authoritative scope UI.
 - Add Global/Custom/Disabled resolution, identity/migration, route-mode, `/0`/`/31`/`/32`, DNS and deterministic-seed tests plus expanded physical UX/device-matrix coverage.
+- Add lightweight country IPv4 presets for Australia, United States, United Kingdom, Indonesia and France with Add/Replace semantics and route-hidden identities.
+- Default country imports to excluding medium/low-confidence provider candidates and known VPN/proxy/Tor matches, while allowing explicit opt-out.
+- Add a compact bundled country pack plus validated app-private cache; malformed/older downloads fail closed to the previous cached/bundled data.
+- Add bounded HTTPS country-data refresh with no telemetry or profile/installed-app upload, plus optional platform `JobScheduler` refresh that is off by default and defaults to monthly when enabled.
+- Keep scheduled refresh failures on the user-selected monthly/weekly/daily cadence instead of creating extra backoff retries, and never rewrite saved profiles in the background.
+- Add a stdlib Python country-pack generator using active RIR allocation/assignment records, current RouteViews origins, optional PeeringDB corroboration and Tor/X4B/monosans exclusion intelligence without probing candidate addresses.
+- Add read-only PR live-source validation with an auditable generated-pack artifact; repository write permission is confined to scheduled/manual country-data update jobs.
+- Harden downloaded/generated pack validation for schema/timestamp, exact country set, bounded counts, public IPv4, uniqueness, confidence, anonymity flags and provider/ASN provenance.
+- Update release/CI permission checks for the intentional `INTERNET` and persisted-job `RECEIVE_BOOT_COMPLETED` permissions while retaining an exact allow-list.
 - Enforce one immutable NetVeil profile per app process and explicitly reject `system_server` scope.
 - Canonicalise IPv4 configuration numerically and preserve package-stable whitelist randomisation.
 - Centralise Wi-Fi/cellular/Ethernet/CLAT/VPN interface classification and remove the hard-coded `wlan0` fallback.

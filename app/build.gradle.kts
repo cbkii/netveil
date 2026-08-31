@@ -76,4 +76,6 @@ dependencies {
     // API 101 remains intentional for compatibility with current Vector/LSPosed API-101+ frameworks.
     compileOnly("io.github.libxposed:api:101.0.1")
     testImplementation("junit:junit:4.13.2")
+    // Android's org.json implementation is not executable in local JVM tests.
+    testImplementation("org.json:json:20240303")
 }
