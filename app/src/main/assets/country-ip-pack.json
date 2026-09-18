@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "generated_at": "2026-09-17T03:35:48Z",
+  "generated_at": "2026-09-18T03:34:55Z",
   "sources": [
     "RIR delegated statistics",
     "RouteViews current-origin prefixes",
@@ -217,7 +217,7 @@
         "asn": 20115
       },
       {
-        "ipv4": "16.216.216.118",
+        "ipv4": "16.5.36.249",
         "confidence": "medium",
         "known_vpn": false,
         "known_proxy": false,
@@ -262,7 +262,7 @@
         "asn": 20115
       },
       {
-        "ipv4": "16.217.100.52",
+        "ipv4": "16.216.30.43",
         "confidence": "medium",
         "known_vpn": false,
         "known_proxy": false,
@@ -307,7 +307,7 @@
         "asn": 20115
       },
       {
-        "ipv4": "16.217.217.187",
+        "ipv4": "16.216.216.118",
         "confidence": "medium",
         "known_vpn": false,
         "known_proxy": false,
@@ -581,7 +581,7 @@
         "asn": 17451
       },
       {
-        "ipv4": "36.64.2.134",
+        "ipv4": "36.64.19.210",
         "confidence": "high",
         "known_vpn": false,
         "known_proxy": false,
@@ -617,7 +617,7 @@
         "asn": 17451
       },
       {
-        "ipv4": "36.64.19.210",
+        "ipv4": "36.64.21.177",
         "confidence": "high",
         "known_vpn": false,
         "known_proxy": false,
@@ -653,7 +653,7 @@
         "asn": 17451
       },
       {
-        "ipv4": "36.64.21.177",
+        "ipv4": "36.64.31.86",
         "confidence": "high",
         "known_vpn": false,
         "known_proxy": false,
