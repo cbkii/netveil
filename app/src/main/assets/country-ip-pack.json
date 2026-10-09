@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "generated_at": "2026-10-07T03:42:13Z",
+  "generated_at": "2026-10-09T03:43:24Z",
   "sources": [
     "RIR delegated statistics",
     "RouteViews current-origin prefixes",
@@ -262,7 +262,7 @@
         "asn": 20115
       },
       {
-        "ipv4": "16.216.30.43",
+        "ipv4": "16.5.190.223",
         "confidence": "medium",
         "known_vpn": false,
         "known_proxy": false,
@@ -307,7 +307,7 @@
         "asn": 20115
       },
       {
-        "ipv4": "16.216.216.118",
+        "ipv4": "16.216.30.43",
         "confidence": "medium",
         "known_vpn": false,
         "known_proxy": false,
